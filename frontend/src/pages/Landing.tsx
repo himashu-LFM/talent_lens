@@ -1,7 +1,9 @@
+import { useRef } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowRight, BrainCircuit, CheckCircle2, EyeOff, FileSearch, Mail, ShieldCheck, Sparkles, Table2, Zap } from "lucide-react";
 import Logo, { Wordmark } from "../components/Logo";
+import AIViz from "../components/AIViz";
 
 const FEATURES = [
   { icon: BrainCircuit, title: "Hybrid AI scoring, fully offline", body: "On-device semantic matching plus must-have gating and BM25 relevance. No API keys, no data leaving your machine." },
@@ -21,8 +23,17 @@ const STEPS = [
 const fade = (d = 0) => ({ initial: { opacity: 0, y: 18 }, whileInView: { opacity: 1, y: 0 }, viewport: { once: true, margin: "-60px" }, transition: { duration: 0.5, delay: d, ease: [0.2, 0.8, 0.2, 1] } });
 
 export default function Landing() {
+  const heroRef = useRef<HTMLElement>(null);
+  function onMove(e: React.MouseEvent) {
+    const el = heroRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    el.style.setProperty("--mx", `${e.clientX - r.left}px`);
+    el.style.setProperty("--my", `${e.clientY - r.top}px`);
+  }
   return (
     <div className="landing">
+      <div className="noise" aria-hidden />
       <header className="l-nav">
         <div className="l-nav-inner">
           <Link to="/" className="topbar-brand"><Logo /><Wordmark /></Link>
@@ -35,8 +46,11 @@ export default function Landing() {
         </div>
       </header>
 
-      <section className="hero">
-        <div className="hero-bg" aria-hidden><span className="blob b1" /><span className="blob b2" /><span className="grid-lines" /></div>
+      <section className="hero" ref={heroRef} onMouseMove={onMove}>
+        <div className="hero-bg" aria-hidden><span className="blob b1" /><span className="blob b2" /><span className="grid-lines" /><span className="spot" /></div>
+        <motion.div className="hero-viz" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1, delay: 0.2 }} aria-hidden>
+          <AIViz size={520} dense />
+        </motion.div>
         <motion.div className="hero-inner" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
           <div className="eyebrow"><Zap size={13} /> Offline AI screening · no API key</div>
           <h1>Find the best candidates<br /><span className="grad">in seconds, not evenings.</span></h1>

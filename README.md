@@ -40,6 +40,10 @@ and export. No LLM API key required.
   applications, and surfaces them as a banner on the dashboard
 
 ### Review workflow
+- **Candidate detail drawer** — click any row (or press ↵) for a split-screen view: animated
+  match-score ring, AI brief, score breakdown, "what would raise this score", evidence,
+  interview questions, flags, notes, status pills; ← → to move between candidates
+- **Command palette** (Ctrl/⌘ K) — jump to any page or action from the keyboard
 - Candidate **status pipeline** (New → Shortlisted → Interview → Rejected → Hired) with
   **reviewer notes**, saved per run
 - Views: **Table** · **Requirements heatmap** (who covers what, column coverage %) ·

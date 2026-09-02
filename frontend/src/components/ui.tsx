@@ -1,8 +1,10 @@
 /* Shared UI primitives: skeletons, spinners, count-up numbers, empty states,
    page transitions, screening progress overlay. */
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, FileSearch, Loader2, ScanSearch, Sparkles, Trophy } from "lucide-react";
+import AIViz from "./AIViz";
 
 /* ------------------------------------------------------------------ */
 export function Skeleton({ w, h = 14, r = 6, className = "" }: { w?: string | number; h?: number; r?: number; className?: string }) {
@@ -114,12 +116,12 @@ export function ScreeningOverlay({ open, label }: { open: boolean; label?: strin
     const t3 = setTimeout(() => setStep(3), 3400);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [open]);
-  return (
+  return createPortal(
     <AnimatePresence>
       {open && (
         <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <motion.div className="overlay-card" initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0 }}>
-            <div className="overlay-ring"><span /></div>
+          <motion.div className="overlay-card" initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0 }} role="status" aria-live="polite">
+            <div className="overlay-viz"><AIViz size={150} /></div>
             <h3>{label || "Screening resumes"}</h3>
             <ul className="steps">
               {STEPS.map((s, i) => {
@@ -137,6 +139,7 @@ export function ScreeningOverlay({ open, label }: { open: boolean; label?: strin
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body
   );
 }
