@@ -1,0 +1,25 @@
+# Render Blueprint — deploys the FastAPI backend as a free web service.
+# Dashboard → New → Blueprint → pick this repo.
+services:
+  - type: web
+    name: talentlens-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && python -c "from app.scoring import embedding; embedding.available()"
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: CORS_ORIGINS
+        value: https://YOUR-VERCEL-APP.vercel.app
+      - key: DATA_DIR
+        value: /tmp/talentlens
+      - key: FASTEMBED_CACHE_PATH
+        value: /opt/render/project/src/backend/.fastembed
+      # Gmail (optional): add credentials.json + token.json as Secret Files, then:
+      - key: GMAIL_CREDENTIALS_FILE
+        value: /etc/secrets/credentials.json
+      - key: GMAIL_TOKEN_FILE
+        value: /etc/secrets/token.json

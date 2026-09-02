@@ -13,7 +13,7 @@ interface Props {
   labelId: string;
   unreadOnly: boolean;
   markRead: boolean;
-  onLabel: (id: string) => void;
+  onLabel: (id: string, name?: string) => void;
   onUnreadOnly: (v: boolean) => void;
   onMarkRead: (v: boolean) => void;
   onConnectedChange: (connected: boolean) => void;
@@ -42,8 +42,8 @@ export default function GmailPanel({
       const ls = await gmailLabels();
       setLabels(ls);
       if (!labelId && ls.length) {
-        const firstUser = ls.find((l) => l.type === "user");
-        onLabel((firstUser ?? ls[0]).id);
+        const first = ls.find((l) => l.type === "user") ?? ls[0];
+        onLabel(first.id, first.name);
       }
     } catch (e) {
       toast.error(`Couldn't load Gmail labels: ${msg(e)}`);
@@ -77,7 +77,7 @@ export default function GmailPanel({
       setLabels((prev) =>
         prev.some((l) => l.id === label.id) ? prev : [label, ...prev]
       );
-      onLabel(label.id);
+      onLabel(label.id, label.name);
       setNewLabel("");
       toast.update(id, "success", `Label “${label.name}” ready — now selected.`);
     } catch (e) {
@@ -122,6 +122,7 @@ export default function GmailPanel({
             email; it only marks screened messages as read (optional).
           </p>
           <button className="btn btn-google" onClick={connect} disabled={connecting}>
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden><path fill="#EA4335" d="M12 11v2.6h6.5c-.3 1.6-1.9 4.6-6.5 4.6-3.9 0-7.1-3.2-7.1-7.2S8.1 3.8 12 3.8c2.2 0 3.7.9 4.6 1.8l3.1-3C17.7.9 15.1 0 12 0 5.4 0 0 5.4 0 12s5.4 12 12 12c6.9 0 11.5-4.9 11.5-11.7 0-.8-.1-1.4-.2-2H12z"/></svg>
             {connecting ? "Waiting for Google…" : "Connect Gmail"}
           </button>
         </>
@@ -131,7 +132,7 @@ export default function GmailPanel({
         <>
           <div className="field">
             <label className="field-label">Applications label</label>
-            <LabelPicker labels={labels} value={labelId} onChange={onLabel} />
+            <LabelPicker labels={labels} value={labelId} onChange={(id) => onLabel(id, labels.find((l) => l.id === id)?.name)} />
             <p className="hint">
               Type to search. Labels you created appear under <b>Your labels</b>.
             </p>

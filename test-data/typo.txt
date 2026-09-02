@@ -1,0 +1,10 @@
+Karan Singh
+karan.singh@example.com | +91 99887 76655 | Delhi
+EXPERIENCE
+Backend Developer - AppWorks | Feb 2020 - Present
+- Services in Pyhton and Go; deployed on Kubernets with Dockr; models in Tensorflw.
+- Some machne learning work and LLM prompt enginering for a chatbot.
+EDUCATION
+B.Tech IT - DTU | 2016 - 2020
+SKILLS
+Pyhton, Kubernets, Tensorflw, SQL, Git, REST APIs

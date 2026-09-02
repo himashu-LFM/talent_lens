@@ -1,15 +1,11 @@
 import { useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { FileText, UploadCloud, X } from "lucide-react";
 
-interface Props {
-  files: File[];
-  onFiles: (files: File[]) => void;
-}
-
+interface Props { files: File[]; onFiles: (files: File[]) => void }
 const ACCEPT = [".pdf", ".docx", ".txt"];
-
-function accepted(name: string) {
-  return ACCEPT.some((ext) => name.toLowerCase().endsWith(ext));
-}
+const accepted = (n: string) => ACCEPT.some((e) => n.toLowerCase().endsWith(e));
+const fmt = (b: number) => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`);
 
 export default function UploadZone({ files, onFiles }: Props) {
   const [drag, setDrag] = useState(false);
@@ -25,54 +21,35 @@ export default function UploadZone({ files, onFiles }: Props) {
 
   return (
     <div className="source-body">
-      <div
-        className={`dropzone ${drag ? "dropzone--active" : ""}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDrag(true);
-        }}
+      <div className={`dropzone ${drag ? "dropzone--active" : ""}`}
+        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDrag(false);
-          addFiles(e.dataTransfer.files);
-        }}
-        onClick={() => inputRef.current?.click()}
-      >
-        <svg className="dz-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-          <path d="M12 16V4m0 0L8 8m4-4l4 4" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3" strokeLinecap="round" />
-        </svg>
-        <p className="dz-text">
-          Drag &amp; drop resumes, or <span className="link">browse</span>
-        </p>
-        <p className="dz-hint">PDF, DOCX or TXT · multiple files</p>
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept={ACCEPT.join(",")}
-          hidden
-          onChange={(e) => addFiles(e.target.files)}
-        />
+        onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
+        onClick={() => inputRef.current?.click()} role="button" tabIndex={0}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && inputRef.current?.click()}>
+        <motion.div className="dz-icon" animate={drag ? { y: -4, scale: 1.08 } : { y: 0, scale: 1 }}><UploadCloud size={30} /></motion.div>
+        <p className="dz-text">{drag ? "Release to add" : <>Drag &amp; drop resumes, or <span className="link">browse</span></>}</p>
+        <p className="dz-hint">PDF, DOCX or TXT · multiple files · up to 15 MB each</p>
+        <input ref={inputRef} type="file" multiple accept={ACCEPT.join(",")} hidden onChange={(e) => addFiles(e.target.files)} />
       </div>
 
-      {files.length > 0 && (
-        <ul className="file-list">
-          {files.map((f) => (
-            <li key={f.name + f.size} className="file-chip">
-              <span className="file-name">{f.name}</span>
-              <button
-                className="file-remove"
-                onClick={() => onFiles(files.filter((x) => x !== f))}
-                aria-label={`Remove ${f.name}`}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <AnimatePresence>
+        {files.length > 0 && (
+          <motion.ul className="file-list" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <AnimatePresence>
+              {files.map((f) => (
+                <motion.li key={f.name + f.size} className="file-chip" layout initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}>
+                  <FileText size={14} />
+                  <span className="file-name" title={f.name}>{f.name}</span>
+                  <span className="file-size">{fmt(f.size)}</span>
+                  <button className="file-remove" onClick={(e) => { e.stopPropagation(); onFiles(files.filter((x) => x !== f)); }} aria-label={`Remove ${f.name}`}><X size={12} /></button>
+                </motion.li>
+              ))}
+            </AnimatePresence>
+            {files.length > 1 && <li><button className="link-btn" onClick={() => onFiles([])}>Clear all</button></li>}
+          </motion.ul>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

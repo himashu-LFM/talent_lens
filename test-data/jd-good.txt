@@ -1,0 +1,10 @@
+AI Engineer
+
+We are hiring an AI Engineer with 3+ years of experience to build and ship production AI features.
+
+Must have: Python, machine learning, and TensorFlow or PyTorch.
+Required: experience with LLMs, prompt engineering and RAG, and hands-on work with OpenAI or Claude APIs building AI agents.
+Nice to have: Power BI is a plus.
+
+You will design, build and deploy AI features end to end, own model evaluation, and collaborate
+with product and data teams to deliver measurable outcomes. Strong communication skills required.

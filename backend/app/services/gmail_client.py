@@ -18,12 +18,16 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# modify scope lets us mark messages as read after screening.
-SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+# modify: read + mark-as-read; send: email candidates from the app.
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 
 _HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CREDENTIALS_FILE = os.path.join(_HERE, "credentials.json")
-TOKEN_FILE = os.path.join(_HERE, "token.json")
+# Paths can be overridden for hosted deployments (e.g. Render "Secret Files").
+CREDENTIALS_FILE = os.getenv("GMAIL_CREDENTIALS_FILE", os.path.join(_HERE, "credentials.json"))
+TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", os.path.join(_HERE, "token.json"))
 
 RESUME_EXTS = (".pdf", ".docx", ".txt")
 
@@ -43,11 +47,47 @@ def credentials_present() -> bool:
 def _load_cached_creds() -> Credentials | None:
     if not os.path.exists(TOKEN_FILE):
         return None
-    creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    # Use the scopes actually stored in the token (don't force the new SCOPES list,
+    # or refreshing an older token would fail). can_send() checks for 'send'.
+    creds = Credentials.from_authorized_user_file(TOKEN_FILE)
     if creds and creds.expired and creds.refresh_token:
         creds.refresh(Request())
         _save(creds)
     return creds if creds and creds.valid else None
+
+
+def granted_scopes() -> list[str]:
+    creds = _load_cached_creds()
+    return list(creds.scopes or []) if creds else []
+
+
+def can_send() -> bool:
+    return "https://www.googleapis.com/auth/gmail.send" in granted_scopes()
+
+
+def disconnect() -> None:
+    """Forget the cached token so the user can re-authorise (e.g. for new scopes)."""
+    if os.path.exists(TOKEN_FILE):
+        os.remove(TOKEN_FILE)
+
+
+def send_email(to: str, subject: str, body: str) -> str:
+    """Send a plain-text email from the connected account. Returns message id."""
+    import base64 as _b64
+    from email.mime.text import MIMEText
+
+    if not can_send():
+        raise PermissionError(
+            "Sending requires re-authorising Gmail with the 'send' permission: "
+            "disconnect and connect again."
+        )
+    svc = _service()
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["to"] = to
+    msg["subject"] = subject
+    raw = _b64.urlsafe_b64encode(msg.as_bytes()).decode()
+    sent = svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+    return sent.get("id", "")
 
 
 def _save(creds: Credentials) -> None:

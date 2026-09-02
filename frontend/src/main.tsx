@@ -6,6 +6,14 @@ import { AuthProvider } from "./auth/AuthProvider";
 import { ToastProvider } from "./components/Toast";
 import "./styles.css";
 
+// Apply saved theme before first paint to avoid a flash.
+try {
+  const t = localStorage.getItem("tl-theme");
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+} catch {
+  /* ignore */
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
