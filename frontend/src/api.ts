@@ -155,6 +155,28 @@ async function json<T>(res: Response): Promise<T> {
 
 const J = { "Content-Type": "application/json" };
 
+/** Screening can legitimately take minutes (large batches, or a sleeping free-tier
+ *  backend cold-starting). `fetch` has no default timeout, so without this a stalled
+ *  connection leaves the UI spinning forever. */
+const SCREEN_TIMEOUT_MS = 300_000;
+
+async function withTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } catch (e) {
+    if ((e as Error)?.name === "AbortError") {
+      throw new Error(
+        `No response after ${Math.round(ms / 1000)}s. The screening server may be waking up or offline — check it and try again.`
+      );
+    }
+    throw new Error(`Couldn't reach the screening server (${(e as Error)?.message || "network error"}).`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function readiness(): Promise<Readiness> {
   return json(await fetch("/api/ready"));
 }
@@ -172,7 +194,7 @@ export async function screen(
   fd.append("top_n", String(topN));
   if (weights) fd.append("weights", JSON.stringify(weights));
   files.forEach((f) => fd.append("files", f));
-  return json(await fetch("/api/screen", { method: "POST", body: fd }));
+  return json(await withTimeout("/api/screen", { method: "POST", body: fd }, SCREEN_TIMEOUT_MS));
 }
 
 export async function analyzeJD(title: string, description: string): Promise<JDAnalysis> {
@@ -225,7 +247,9 @@ export async function gmailScreen(params: {
   mark_read: boolean;
   weights?: Weights;
 }): Promise<ScreenResponse> {
-  return json(await fetch("/api/gmail/screen", { method: "POST", headers: J, body: JSON.stringify(params) }));
+  return json(
+    await withTimeout("/api/gmail/screen", { method: "POST", headers: J, body: JSON.stringify(params) }, SCREEN_TIMEOUT_MS)
+  );
 }
 export async function gmailSend(to: string, subject: string, body: string): Promise<void> {
   await json(await fetch("/api/gmail/send", { method: "POST", headers: J, body: JSON.stringify({ to, subject, body }) }));

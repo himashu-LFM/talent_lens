@@ -109,12 +109,14 @@ const STEPS = [
  *  until the request resolves. */
 export function ScreeningOverlay({ open, label }: { open: boolean; label?: string }) {
   const [step, setStep] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    if (!open) { setStep(0); return; }
+    if (!open) { setStep(0); setElapsed(0); return; }
     const t1 = setTimeout(() => setStep(1), 700);
     const t2 = setTimeout(() => setStep(2), 1800);
     const t3 = setTimeout(() => setStep(3), 3400);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+    const tick = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearInterval(tick); };
   }, [open]);
   return createPortal(
     <AnimatePresence>
@@ -136,6 +138,10 @@ export function ScreeningOverlay({ open, label }: { open: boolean; label?: strin
               })}
             </ul>
             <div className="progress"><span /></div>
+            <p className="muted small" style={{ marginTop: 12, textAlign: "center" }}>
+              {elapsed}s elapsed
+              {elapsed >= 20 && " · the screening server may be waking up — this can take up to a minute on first use"}
+            </p>
           </motion.div>
         </motion.div>
       )}

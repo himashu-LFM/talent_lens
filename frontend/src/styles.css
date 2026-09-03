@@ -18,6 +18,7 @@
   --gold-2: #ffd84d;
   --gold-dim: #c99e2a;
   --gold-ink: #131313;
+  --logo-ink: #f0f0ee;   /* reversed aperture blades for dark surfaces */
   --green: #3fbf84;
   --amber: #e0a92e;
   --red: #e5615f;
@@ -34,6 +35,7 @@
   --bg: #f6f6f4; --bg-2: #eeeeeb; --panel: #ffffff; --panel-2: #f4f4f1; --panel-3: #ebebe7;
   --line: #e4e4df; --line-2: #d1d1cb; --text: #15161a; --muted: #5d626b; --faint: #8a8f98;
   --gold: #c9990a; --gold-2: #e0b424; --gold-dim: #a67f06; --gold-ink: #17130a; --amber: #b8860b;
+  --logo-ink: #231f20;   /* the brand's primary charcoal, as on white */
   --shadow-1: 0 1px 2px rgba(20,20,30,.06), 0 8px 24px -14px rgba(20,20,30,.18);
   --shadow-2: 0 2px 6px rgba(20,20,30,.08), 0 24px 48px -24px rgba(20,20,30,.28);
   --gold-glow: 0 0 0 3px rgba(201,153,10,.2);
@@ -42,6 +44,10 @@
 /* ---------- base ---------- */
 *, *::before, *::after { box-sizing: border-box; min-width: 0; }
 html, body { margin: 0; }
+/* Guard: decorative full-bleed bands and blobs are sized in `vw`, which counts the
+   scrollbar gutter. `clip` swallows that sliver without creating a scroll container,
+   so `position: sticky` keeps working (unlike `overflow-x: hidden`). */
+html, body { overflow-x: clip; }
 html { scroll-behavior: smooth; }
 body { background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 a { color: var(--gold); }
@@ -637,7 +643,9 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 @media (max-width: 640px) { .mock-stats { grid-template-columns: repeat(2, 1fr); } .mock-row { grid-template-columns: 30px 1fr 44px; } .mock-bar-track { display: none; } }
 .l-section { max-width: 1160px; margin: 0 auto; padding: 88px 24px; }
 .l-section.alt { position: relative; }
-.l-section.alt::before { content: ""; position: absolute; inset: 0 -100vw; background: var(--bg-2); z-index: -1; }
+/* Full-bleed band: reach exactly to the viewport edges, not 100vw past them
+   (`inset: 0 -100vw` made the page 1280px wider than the viewport). */
+.l-section.alt::before { content: ""; position: absolute; inset: 0 calc(50% - 50vw); background: var(--bg-2); z-index: -1; }
 .l-head { text-align: center; max-width: 620px; margin: 0 auto 44px; }
 .l-head h2 { font-size: clamp(1.7rem, 3.4vw, 2.4rem); letter-spacing: -.025em; margin: 0 0 10px; }
 .l-head p { color: var(--muted); margin: 0; font-size: 1.02rem; }

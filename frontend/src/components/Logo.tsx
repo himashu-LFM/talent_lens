@@ -1,23 +1,33 @@
-/** ListenFirst-style aperture mark. `spin` animates the blades slowly. */
+/** ListenFirst aperture mark.
+ *
+ *  Three charcoal shutter blades rotated 120° apart, separated by spiral slits, with
+ *  the triangular aperture opening filled in brand gold. No backing disc — the mark is
+ *  transparent so it sits on light and dark surfaces alike.
+ *
+ *  Geometry (viewBox 0 0 100 100, centre 50,50): blade 0 runs from the inner vertex at
+ *  θ=90° out to the rim at θ=50°, along the rim to θ=160°, then back to the inner
+ *  vertex at θ=200°. The 10° shortfall against the next blade's 210° edge is the slit.
+ *  `spin` animates the blades slowly.
+ */
+const BLADE =
+  "M50 35 L79.568 14.762 A46 46 0 0 0 6.774 34.267 L35.905 55.13 Z";
+
 export default function Logo({ size = 34, spin = false }: { size?: number; spin?: boolean }) {
   return (
-    <svg viewBox="0 0 100 100" className={`logo-mark ${spin ? "logo-spin" : ""}`} width={size} height={size} aria-hidden="true">
-      <defs>
-        <linearGradient id="lf-gold" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#ffd84d" />
-          <stop offset="1" stopColor="#e6b400" />
-        </linearGradient>
-      </defs>
-      <circle cx="50" cy="50" r="47" fill="#0d0d10" stroke="rgba(255,255,255,0.12)" strokeWidth="2" />
-      <g className="blades" fill="#1e1f24">
-        <path d="M50 6 A44 44 0 0 1 88 28 L50 50 Z" />
-        <path d="M88 28 A44 44 0 0 1 88 72 L50 50 Z" />
-        <path d="M88 72 A44 44 0 0 1 50 94 L50 50 Z" />
-        <path d="M50 94 A44 44 0 0 1 12 72 L50 50 Z" />
-        <path d="M12 72 A44 44 0 0 1 12 28 L50 50 Z" />
-        <path d="M12 28 A44 44 0 0 1 50 6 L50 50 Z" fill="url(#lf-gold)" />
+    <svg
+      viewBox="0 0 100 100"
+      className={`logo-mark ${spin ? "logo-spin" : ""}`}
+      width={size}
+      height={size}
+      aria-hidden="true"
+    >
+      {/* aperture opening — drawn first so the blades crop it to a crisp triangle */}
+      <path d="M50 34 L63.856 58 L36.144 58 Z" fill="#F5C518" />
+      <g className="blades" fill="var(--logo-ink, #231f20)">
+        <path d={BLADE} />
+        <path d={BLADE} transform="rotate(120 50 50)" />
+        <path d={BLADE} transform="rotate(240 50 50)" />
       </g>
-      <circle cx="50" cy="50" r="9" fill="#0d0d10" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
     </svg>
   );
 }
