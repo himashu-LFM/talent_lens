@@ -781,7 +781,7 @@ input[type="checkbox"].check { width: 15px; height: 15px; accent-color: var(--ac
 .auth-right { display: grid; place-items: center; padding: 40px 26px; }
 .auth-card { width: 100%; max-width: 400px; }
 .auth-tabs { position: relative; display: grid; grid-template-columns: 1fr 1fr; background: var(--surface-0); border: 1px solid var(--line); border-radius: 14px; padding: 4px; margin-bottom: 26px; gap: 3px; }
-.auth-ind { position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); border-radius: 10px; background: var(--accent); }
+.auth-ind { position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); border-radius: 10px; background: var(--accent); transition: transform .3s var(--ease); }
 .auth-tabs button { position: relative; z-index: 1; border: none; background: transparent; font-weight: 700; font-size: 13.5px; padding: 11px; border-radius: 10px; transition: color .2s; color: var(--muted); }
 .auth-tabs button.on { color: var(--on-accent); }
 .auth-switch { text-align: center; margin: 20px 0 0; font-size: 13.5px; color: var(--faint); }

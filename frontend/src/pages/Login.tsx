@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, CheckCircle2, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../auth/AuthProvider";
 import { useToast } from "../components/Toast";
@@ -40,7 +39,7 @@ export default function Login() {
       <div className="auth-left">
         <div className="auth-blob a" aria-hidden /><div className="auth-blob b" aria-hidden />
         <Link to="/" className="auth-back"><ArrowLeft size={15} /> Back to site</Link>
-        <motion.div className="auth-brand" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+        <div className="auth-brand fade-in">
           <div className="auth-tile"><LogoTile size={84} radius={26} glyph={50} /></div>
           <h1>TalentLens</h1>
           <p className="auth-tag">Resume screening, explained</p>
@@ -49,30 +48,26 @@ export default function Login() {
             <li><CheckCircle2 size={17} /> Pull applications straight from Gmail</li>
             <li><CheckCircle2 size={17} /> Transparent, evidence-backed scoring</li>
           </ul>
-        </motion.div>
+        </div>
       </div>
 
       <div className="auth-right">
-        <motion.div className="auth-card" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.1 }}>
+        <div className="auth-card fade-in" style={{ animationDelay: ".08s" }}>
           <div className="auth-tabs" role="tablist">
-            <motion.span className="auth-ind" animate={{ x: mode === "in" ? 0 : "100%" }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} aria-hidden />
-            <button role="tab" aria-selected={mode === "in"} className={mode === "in" ? "on" : ""} onClick={() => setMode("in")}>Sign in</button>
-            <button role="tab" aria-selected={mode === "up"} className={mode === "up" ? "on" : ""} onClick={() => setMode("up")}>Create account</button>
+            <span className="auth-ind" style={{ transform: mode === "in" ? "translateX(0)" : "translateX(100%)" }} aria-hidden />
+            <button type="button" role="tab" aria-selected={mode === "in"} className={mode === "in" ? "on" : ""} onClick={() => setMode("in")}>Sign in</button>
+            <button type="button" role="tab" aria-selected={mode === "up"} className={mode === "up" ? "on" : ""} onClick={() => setMode("up")}>Create account</button>
           </div>
 
           {!configured && <div className="notice warn mb"><b>Supabase not configured.</b> Paste your project URL &amp; anon key into <code>frontend/.env</code>, then reload.</div>}
 
           <form onSubmit={submit}>
-            <AnimatePresence initial={false}>
-              {mode === "up" && (
-                <motion.div key="name" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} style={{ overflow: "hidden" }}>
-                  <div className="field">
-                    <label className="field-label">Full name</label>
-                    <input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your name" required autoComplete="name" />
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {mode === "up" && (
+              <div className="field fade-in">
+                <label className="field-label">Full name</label>
+                <input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your name" required autoComplete="name" />
+              </div>
+            )}
             <div className="field">
               <label className="field-label">Work email</label>
               <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" required autoComplete="email" />
@@ -89,9 +84,9 @@ export default function Login() {
 
           <p className="auth-switch">
             {mode === "in" ? "New here? " : "Already have an account? "}
-            <button onClick={() => setMode(mode === "in" ? "up" : "in")}>{mode === "in" ? "Create an account" : "Sign in"}</button>
+            <button type="button" onClick={() => setMode(mode === "in" ? "up" : "in")}>{mode === "in" ? "Create an account" : "Sign in"}</button>
           </p>
-        </motion.div>
+        </div>
       </div>
     </div>
   );
