@@ -121,7 +121,7 @@ export default function GmailPanel({
             Connect once to read resume attachments from a label. The app never sends
             email; it only marks screened messages as read (optional).
           </p>
-          <button className="btn btn-google" onClick={connect} disabled={connecting}>
+          <button className="btn btn-secondary" onClick={connect} disabled={connecting}>
             <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden><path fill="#EA4335" d="M12 11v2.6h6.5c-.3 1.6-1.9 4.6-6.5 4.6-3.9 0-7.1-3.2-7.1-7.2S8.1 3.8 12 3.8c2.2 0 3.7.9 4.6 1.8l3.1-3C17.7.9 15.1 0 12 0 5.4 0 0 5.4 0 12s5.4 12 12 12c6.9 0 11.5-4.9 11.5-11.7 0-.8-.1-1.4-.2-2H12z"/></svg>
             {connecting ? "Waiting for Google…" : "Connect Gmail"}
           </button>
@@ -149,7 +149,7 @@ export default function GmailPanel({
                 onKeyDown={(e) => e.key === "Enter" && createLabel()}
               />
               <button
-                className="btn btn-google"
+                className="btn btn-secondary"
                 onClick={createLabel}
                 disabled={creating || !newLabel.trim()}
               >

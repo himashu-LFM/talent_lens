@@ -1,15 +1,10 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { Building2, Calendar, Mail, Save, UserCircle2 } from "lucide-react";
+import { Calendar } from "lucide-react";
 import { useAuth } from "../auth/AuthProvider";
 import { useToast } from "../components/Toast";
 import { Num, Spinner } from "../components/ui";
+import { Avatar, initialsOf } from "../components/ds";
 import { getProfile, upsertProfile, listRuns } from "../lib/db";
-
-function initials(s: string) {
-  const parts = s.split("@")[0].split(/[.\s_]+/).filter(Boolean);
-  return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0]?.toUpperCase() ?? "");
-}
 
 export default function Profile() {
   const { user, configured } = useAuth();
@@ -19,7 +14,7 @@ export default function Profile() {
   const [saving, setSaving] = useState(false);
   const [stats, setStats] = useState({ runs: 0, screened: 0, shortlisted: 0 });
   const [joined, setJoined] = useState("");
-  const displayName = fullName || (user?.user_metadata?.full_name as string) || user?.email || "User";
+  const displayName = fullName || (user?.user_metadata?.full_name as string) || user?.email || "You";
 
   useEffect(() => {
     if (!configured || !user) return;
@@ -38,30 +33,26 @@ export default function Profile() {
   }
 
   return (
-    <main className="page">
-      <div className="page-head"><h1><UserCircle2 size={26} className="h-ico" /> Profile</h1><p>Your account and screening activity.</p></div>
-      <div className="profile-grid">
-        <motion.div className="panel profile-hero" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-          <div className="profile-avatar">{initials(displayName)}</div>
-          <h2 title={displayName}>{displayName}</h2>
-          <p className="muted ellipsis" title={user?.email}>{user?.email}</p>
-          {joined && <p className="joined"><Calendar size={13} /> Member since {joined}</p>}
-          <div className="profile-stats">
-            <div><b><Num value={stats.runs} /></b><span>runs</span></div>
-            <div><b><Num value={stats.screened} /></b><span>screened</span></div>
-            <div><b className="accent"><Num value={stats.shortlisted} /></b><span>shortlisted</span></div>
-          </div>
-        </motion.div>
-
-        <motion.div className="panel" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
-          <div className="panel-head"><h2>Account details</h2></div>
-          {!configured && <div className="notice mb"><b>Read-only.</b> Configure Supabase in <code>frontend/.env</code> to edit and persist your profile.</div>}
-          <div className="field"><label className="field-label">Full name</label><div className="input-ico"><UserCircle2 size={16} /><input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={!configured} /></div></div>
-          <div className="field"><label className="field-label">Company</label><div className="input-ico"><Building2 size={16} /><input className="input" value={company} onChange={(e) => setCompany(e.target.value)} placeholder="ListenFirst" disabled={!configured} /></div></div>
-          <div className="field"><label className="field-label">Email</label><div className="input-ico"><Mail size={16} /><input className="input" value={user?.email ?? ""} disabled /></div></div>
-          <button className="btn btn-primary" onClick={save} disabled={saving || !configured}>{saving ? <Spinner /> : <Save size={15} />} {saving ? "Saving…" : "Save changes"}</button>
-        </motion.div>
+    <div className="profile-grid">
+      <div className="card profile-hero">
+        <Avatar initials={initialsOf(displayName)} tone="emerald" size={84} />
+        <h2 title={displayName}>{displayName}</h2>
+        <p className="e" title={user?.email}>{user?.email ?? "Local mode — no account"}</p>
+        {joined && <p className="j"><Calendar size={12} /> Member since {joined}</p>}
+        <div className="profile-stats">
+          <span><b><Num value={stats.runs} /></b><small>runs</small></span>
+          <span><b><Num value={stats.screened} /></b><small>screened</small></span>
+          <span><b className="amber"><Num value={stats.shortlisted} /></b><small>shortlisted</small></span>
+        </div>
       </div>
-    </main>
+      <div className="card">
+        <div className="card-head"><h2>Account details</h2></div>
+        {!configured && <div className="notice mb"><b>Read-only.</b> Configure Supabase in <code>frontend/.env</code> to edit and persist your profile.</div>}
+        <div className="field"><label className="field-label">Full name</label><input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} disabled={!configured} /></div>
+        <div className="field"><label className="field-label">Company</label><input className="input" value={company} onChange={(e) => setCompany(e.target.value)} placeholder="ListenFirst" disabled={!configured} /></div>
+        <div className="field" style={{ marginBottom: 20 }}><label className="field-label">Email</label><input className="input" value={user?.email ?? ""} disabled /></div>
+        <button className="btn btn-primary" onClick={save} disabled={saving || !configured}>{saving ? <Spinner /> : null} {saving ? "Saving…" : "Save changes"}</button>
+      </div>
+    </div>
   );
 }

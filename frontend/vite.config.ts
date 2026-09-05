@@ -15,6 +15,7 @@ export default defineConfig({
           motion: ["framer-motion"],
           supabase: ["@supabase/supabase-js"],
           icons: ["lucide-react"],
+          three: ["three"],
         },
       },
     },

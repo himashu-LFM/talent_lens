@@ -1,24 +1,26 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { Calendar, Download, Eye, History as HistoryIcon, Inbox, Mail, Trash2, Trophy, Upload, X, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Download, Inbox, Mail, Trash2, Trophy, Upload, Zap } from "lucide-react";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../auth/AuthProvider";
-import Results from "../components/Results";
 import { EmptyState, SkeletonCard } from "../components/ui";
+import { scoreClass } from "../components/ds";
+import { useWorkspace } from "../context/Workspace";
 import { listRuns, deleteRun, type RunRow } from "../lib/db";
-import { exportExcel, type ExportCandidate } from "../api";
+import { exportExcel } from "../api";
 
 function when(iso: string) {
-  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 const SRC = { gmail: { label: "Gmail", Icon: Mail }, upload: { label: "Upload", Icon: Upload }, auto: { label: "Auto", Icon: Zap } } as const;
 
 export default function History() {
   const toast = useToast();
+  const nav = useNavigate();
   const { configured } = useAuth();
+  const { setRun, resetFilters, run } = useWorkspace();
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState<RunRow | null>(null);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -27,73 +29,61 @@ export default function History() {
       .then((rs) => {
         setRuns(rs);
         const want = new URLSearchParams(window.location.search).get("run");
-        if (want) { const r = rs.find((x) => x.id === want); if (r) setOpen(r); }
+        if (want) { const r = rs.find((x) => x.id === want); if (r) openRun(r); }
       })
       .catch((e) => toast.error(`Couldn't load history: ${e.message}`))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function openRun(r: RunRow) {
+    resetFilters();
+    setRun({ data: r.results, runId: r.id, files: [], title: r.title, source: "history", at: r.created_at });
+    nav("/shortlist");
+  }
   async function remove(id: string) {
     try {
       await deleteRun(id);
       setRuns((r) => r.filter((x) => x.id !== id));
-      if (open?.id === id) setOpen(null);
+      if (run?.runId === id) setRun(null);
       toast.success("Run deleted.");
     } catch (e) { toast.error(`Delete failed: ${e instanceof Error ? e.message : ""}`); }
   }
-
-  async function exportRun(run: RunRow, rows?: ExportCandidate[]) {
+  async function exportRun(r: RunRow) {
     setExporting(true);
-    try { await exportExcel(rows ?? run.results.top, run.title); } catch { toast.error("Export failed."); } finally { setExporting(false); }
+    try { await exportExcel(r.results.top, r.title); } catch { toast.error("Export failed."); } finally { setExporting(false); }
   }
 
+  if (!configured) return <div className="page"><EmptyState icon={<Inbox size={26} />} title="History isn't set up yet" body={<>Add your Supabase keys to <code>frontend/.env</code> and reload to start saving runs.</>} /></div>;
+  if (loading) return <div className="page run-grid">{[0, 1, 2].map((i) => <SkeletonCard key={i} lines={4} />)}</div>;
+  if (runs.length === 0) return <div className="page"><EmptyState icon={<Inbox size={26} />} title="No runs yet" body="Screen some resumes and they'll show up here, re-openable with their statuses and notes." action={<button className="btn btn-primary" onClick={() => nav("/")}>Start a screening run</button>} /></div>;
+
   return (
-    <main className="page">
-      <div className="page-head"><h1><HistoryIcon size={26} className="h-ico" /> Screening history</h1><p>Every run you've completed, with its statuses and notes.</p></div>
-
-      {!configured ? (
-        <EmptyState icon={<Inbox size={30} />} title="History isn't set up yet" body={<>Add your Supabase keys to <code>frontend/.env</code> and reload to start saving runs.</>} />
-      ) : loading ? (
-        <div className="run-grid">{[0, 1, 2].map((i) => <SkeletonCard key={i} lines={4} />)}</div>
-      ) : runs.length === 0 ? (
-        <EmptyState icon={<Inbox size={30} />} title="No runs yet" body="Screen some resumes on the dashboard and they'll show up here." />
-      ) : (
-        <div className="run-grid">
-          {runs.map((r, i) => {
-            const s = SRC[(r.source as keyof typeof SRC)] ?? SRC.upload;
-            return (
-              <motion.article key={r.id} className="run-card" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 8) * 0.04 }}>
-                <div className="run-top">
-                  <span className={`src-tag ${r.source}`}><s.Icon size={12} /> {s.label}</span>
-                  <span className="run-date"><Calendar size={12} /> {when(r.created_at)}</span>
-                </div>
-                <h3 className="run-title" title={r.title}>{r.title}</h3>
-                <div className="run-metrics">
-                  <div><b>{r.total_resumes}</b><span>screened</span></div>
-                  <div><b>{r.shortlisted}</b><span>shortlisted</span></div>
-                  <div><b className="accent">{r.avg_score}</b><span>avg score</span></div>
-                </div>
-                {r.top_name && <div className="run-top-cand"><Trophy size={13} /> <span title={r.top_name}>{r.top_name}</span> <b>{r.top_score}</b></div>}
-                <div className="run-actions">
-                  <button className="btn btn-primary sm" onClick={() => setOpen(r)}><Eye size={14} /> View</button>
-                  <button className="btn btn-ghost sm" onClick={() => exportRun(r)} disabled={exporting}><Download size={14} /> Export</button>
-                  <button className="btn btn-ghost sm danger icon-only" onClick={() => remove(r.id)} title="Delete run"><Trash2 size={14} /></button>
-                </div>
-              </motion.article>
-            );
-          })}
-        </div>
-      )}
-
-      {open && (
-        <div className="modal-scrim" onClick={() => setOpen(null)}>
-          <motion.div className="modal" onClick={(e) => e.stopPropagation()} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
-            <button className="modal-x" onClick={() => setOpen(null)} aria-label="Close"><X size={20} /></button>
-            <Results data={open.results} runId={open.id} onExport={(rows) => exportRun(open, rows)} exporting={exporting} />
-          </motion.div>
-        </div>
-      )}
-    </main>
+    <div className="page run-grid">
+      {runs.map((r) => {
+        const s = SRC[r.source as keyof typeof SRC] ?? SRC.upload;
+        const isCurrent = run?.runId === r.id;
+        return (
+          <article key={r.id} className={`run-card card-hover ${r.source}`}>
+            <div className="run-top">
+              <span className={`src-tag ${r.source}`}><s.Icon size={11} /> {s.label}</span>
+              <span className="run-date">{when(r.created_at)}</span>
+            </div>
+            <h3 title={r.title}>{r.title}</h3>
+            <div className="metrics">
+              <span><b>{r.total_resumes}</b><small>screened</small></span>
+              <span><b>{r.shortlisted}</b><small>shortlisted</small></span>
+              <span><b className="amber">{Number(r.avg_score).toFixed(1)}</b><small>avg score</small></span>
+            </div>
+            {r.top_name && <div className="run-top-cand"><Trophy size={14} /><span title={r.top_name}>{r.top_name}</span><b className={`sc-${scoreClass(r.top_score ?? 0)}`}>{r.top_score}</b></div>}
+            <div className="run-actions">
+              <button className={`btn sm ${isCurrent ? "btn-grad" : "btn-ghost"}`} onClick={() => openRun(r)}>{isCurrent ? "Open run · current" : "Open run"}</button>
+              <button className="btn btn-ghost sm icon-only" onClick={() => exportRun(r)} disabled={exporting} aria-label="Export to Excel" title="Export to Excel"><Download size={14} /></button>
+              <button className="btn btn-ghost sm icon-only danger" onClick={() => remove(r.id)} aria-label="Delete run" title="Delete run"><Trash2 size={14} /></button>
+            </div>
+          </article>
+        );
+      })}
+    </div>
   );
 }

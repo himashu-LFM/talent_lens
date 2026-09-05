@@ -20,16 +20,16 @@ export default function UploadZone({ files, onFiles }: Props) {
   }
 
   return (
-    <div className="source-body">
+    <div>
       <div className={`dropzone ${drag ? "dropzone--active" : ""}`}
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
         onClick={() => inputRef.current?.click()} role="button" tabIndex={0}
         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && inputRef.current?.click()}>
-        <motion.div className="dz-icon" animate={drag ? { y: -4, scale: 1.08 } : { y: 0, scale: 1 }}><UploadCloud size={30} /></motion.div>
-        <p className="dz-text">{drag ? "Release to add" : <>Drag &amp; drop resumes, or <span className="link">browse</span></>}</p>
-        <p className="dz-hint">PDF, DOCX or TXT · multiple files · up to 15 MB each</p>
+        <motion.div className="dz-icon" animate={drag ? { y: -4, scale: 1.08 } : { y: 0, scale: 1 }}><UploadCloud size={24} /></motion.div>
+        <p className="dz-text">{drag ? "Release to add" : <>Drop resumes here or <span className="link">browse</span></>}</p>
+        <p className="dz-hint">PDF, DOCX or TXT · up to 300 files · 15 MB each</p>
         <input ref={inputRef} type="file" multiple accept={ACCEPT.join(",")} hidden onChange={(e) => addFiles(e.target.files)} />
       </div>
 

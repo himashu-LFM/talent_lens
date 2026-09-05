@@ -1,19 +1,19 @@
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import JobForm from "../components/JobForm";
+/* "Screen" — the new-run workspace. KPI cards, auto-screen banner, describe-the-role
+   card and add-resumes card; scoring weights live in the context sidebar. */
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { BellRing, Bookmark, BookmarkCheck, FileSearch, ListOrdered, Mail, Play, Radar, Save, ScanLine, Sparkles, Target, Trash2, TrendingUp, Upload, Wand2 } from "lucide-react";
 import UploadZone from "../components/UploadZone";
 import GmailPanel from "../components/GmailPanel";
-import Results from "../components/Results";
 import { useToast } from "../components/Toast";
 import { ScreeningOverlay } from "../components/ui";
-import { BellRing, Bookmark, BookmarkCheck, Mail, Play, Radar, Save, ScanLine, SlidersHorizontal, Sparkles, Trash2, Upload, Wand2 } from "lucide-react";
+import { Eyebrow, ProgressBar, SegTabs, StatCard } from "../components/ds";
+import { Sidebar, useWorkspace } from "../context/Workspace";
 import { useAuth } from "../auth/AuthProvider";
+import { deleteJob, listAllReviews, listJobs, listRuns, saveJob, saveRun, suggestWeights, type JobRow } from "../lib/db";
 import {
-  deleteJob, listAllReviews, listJobs, listRuns, saveJob, saveRun, suggestWeights, type JobRow,
-} from "../lib/db";
-import {
-  ackAutoResult, addWatch, analyzeJD, exportExcel, gmailScreen, listAutoResults, readiness, screen,
-  type AutoResult, type ExportCandidate, type JDAnalysis, type ScreenResponse, type Weights,
+  ackAutoResult, addWatch, analyzeJD, gmailScreen, listAutoResults, screen,
+  type AutoResult, type JDAnalysis, type ScreenResponse, type Weights,
 } from "../api";
 
 type Source = "upload" | "gmail";
@@ -24,16 +24,17 @@ const W_LABEL: Record<keyof Weights, string> = {
 
 export default function Dashboard() {
   const toast = useToast();
+  const nav = useNavigate();
   const { user, configured } = useAuth();
+  const { run, setRun, setDraftTitle, ready, refreshReady, resetFilters } = useWorkspace();
 
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(run?.source !== "history" ? run?.title ?? "" : "");
   const [description, setDescription] = useState("");
   const [topN, setTopN] = useState(10);
   const [files, setFiles] = useState<File[]>([]);
   const [source, setSource] = useState<Source>("upload");
 
   const [gmailConnected, setGmailConnected] = useState(false);
-  const [canSend, setCanSend] = useState(false);
   const [labelId, setLabelId] = useState("");
   const [labelName, setLabelName] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(true);
@@ -41,32 +42,24 @@ export default function Dashboard() {
   const [watchInterval, setWatchInterval] = useState(15);
 
   const [weights, setWeights] = useState<Weights>(DEFAULT_W);
-  const [advanced, setAdvanced] = useState(false);
-  const [semanticReady, setSemanticReady] = useState<boolean | null>(null);
+  const [tune, setTune] = useState(false);
   const [suggestion, setSuggestion] = useState<{ weights: Weights; positives: number; negatives: number } | null>(null);
 
   const [jobs, setJobs] = useState<JobRow[]>([]);
-  const [jobId, setJobId] = useState<string>("");
+  const [jobId, setJobId] = useState("");
   const [jd, setJd] = useState<JDAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-
   const [autoResults, setAutoResults] = useState<AutoResult[]>([]);
-  const [data, setData] = useState<ScreenResponse | null>(null);
-  const [dataFiles, setDataFiles] = useState<File[]>([]);
-  const [runId, setRunId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [exporting, setExporting] = useState(false);
 
   const hasJD = description.trim().length > 0;
-  const firstName = ((user?.user_metadata?.full_name as string) || user?.email || "there").split(/[@.\s]/)[0];
 
+  useEffect(() => { setDraftTitle(title); }, [title, setDraftTitle]);
   useEffect(() => {
-    readiness().then((r) => {
-      setGmailConnected(r.gmail_connected);
-      setCanSend(r.gmail_can_send);
-      setSemanticReady(r.semantic_model === "ready");
-      if (r.default_weights) setWeights(r.default_weights);
-    }).catch(() => setSemanticReady(false));
+    if (ready?.default_weights) setWeights(ready.default_weights);
+    setGmailConnected(!!ready?.gmail_connected);
+  }, [ready]);
+  useEffect(() => {
     listAutoResults(true).then(setAutoResults).catch(() => {});
     if (configured && user) {
       listJobs().then(setJobs).catch(() => {});
@@ -76,55 +69,40 @@ export default function Dashboard() {
     }
   }, [configured, user]);
 
-  // ---- helpers ----
-  function setFilesToasted(next: File[]) {
-    const added = next.length - files.length;
-    setFiles(next);
-    if (added > 0) toast.info(`Added ${added} file${added === 1 ? "" : "s"}`);
-  }
-
-  async function persist(res: ScreenResponse, src: "upload" | "gmail" | "auto") {
-    setRunId(null);
-    if (configured && user && res.top.length > 0) {
-      try {
-        const id = await saveRun(user.id, title || res.job.title, src, res, jobId || null);
-        setRunId(id);
-        toast.info("Saved to history.");
-      } catch (e) {
-        toast.error(`History save failed: ${msg(e)}`, 6000);
-      }
-    }
-  }
-
-  function showResults(res: ScreenResponse, srcFiles: File[] = []) {
-    setData(res);
-    setDataFiles(srcFiles);
-    requestAnimationFrame(() => document.getElementById("results")?.scrollIntoView({ behavior: "smooth" }));
+  // ---- run lifecycle ----
+  async function finish(res: ScreenResponse, src: "upload" | "gmail" | "auto", srcFiles: File[]) {
+    resetFilters();
+    setRun({ data: res, runId: null, files: srcFiles, title: title || res.job.title, source: src, at: new Date().toISOString() });
     const fl = res.flagged?.length ?? 0;
     if (fl) toast.info(`${fl} file${fl === 1 ? "" : "s"} excluded — didn't look like a resume.`, 6000);
     if (res.errors.length) toast.error(`${res.errors.length} file(s) couldn't be read.`, 6000);
+    nav("/shortlist");
+    if (configured && user && res.top.length > 0) {
+      try {
+        const id = await saveRun(user.id, title || res.job.title, src, res, jobId || null);
+        setRun((r) => (r && r.data === res ? { ...r, runId: id } : r));
+        toast.info("Saved to history.");
+      } catch (e) { toast.error(`History save failed: ${msg(e)}`, 6000); }
+    }
   }
 
-  // ---- actions ----
   async function runUpload() {
     if (!hasJD) return toast.error("Add a job description first.");
     if (!files.length) return toast.error("Upload at least one resume.");
-    setLoading(true); setData(null);
+    setLoading(true);
     const id = toast.loading(`Screening ${files.length} resume(s)…`);
     try {
       const res = await screen(title, description, topN, files, weights);
-      showResults(res, files);
       toast.update(id, "success", `Ranked ${res.ranked.length} — showing top ${res.top.length}.`);
-      await persist(res, "upload");
-    } catch (e) {
-      toast.update(id, "error", `Screening failed: ${msg(e)}`, 7000);
-    } finally { setLoading(false); }
+      await finish(res, "upload", files);
+    } catch (e) { toast.update(id, "error", `Screening failed: ${msg(e)}`, 7000); }
+    finally { setLoading(false); }
   }
 
   async function runGmail() {
     if (!hasJD) return toast.error("Add a job description first.");
     if (!labelId) return toast.error("Pick a Gmail label to screen.");
-    setLoading(true); setData(null);
+    setLoading(true);
     const id = toast.loading("Fetching resumes from Gmail…");
     try {
       const res = await gmailScreen({ title, description, top_n: topN, label_id: labelId, unread_only: unreadOnly, mark_read: markRead, weights });
@@ -132,13 +110,11 @@ export default function Dashboard() {
         toast.update(id, "info", unreadOnly ? "No unread emails with resume attachments in that label." : "No resume attachments found in that label.", 6000);
         return;
       }
-      showResults(res);
       toast.update(id, "success", `Fetched ${res.fetched} — ranked ${res.ranked.length}, showing top ${res.top.length}.`);
       if (markRead) toast.info("Screened emails marked as read.");
-      await persist(res, "gmail");
-    } catch (e) {
-      toast.update(id, "error", `Gmail screening failed: ${msg(e)}`, 7000);
-    } finally { setLoading(false); }
+      await finish(res, "gmail", []);
+    } catch (e) { toast.update(id, "error", `Gmail screening failed: ${msg(e)}`, 7000); }
+    finally { setLoading(false); }
   }
 
   async function createWatch() {
@@ -147,32 +123,29 @@ export default function Dashboard() {
     try {
       await addWatch({ label_id: labelId, label_name: labelName, title, description, top_n: topN, interval_min: watchInterval, unread_only: unreadOnly, mark_read: markRead, weights });
       toast.success(`Auto-screen on: checking “${labelName || "label"}” every ${watchInterval} min. Manage in Settings.`, 6000);
-    } catch (e) {
-      toast.error(`Couldn't create watch: ${msg(e)}`);
-    }
+      refreshReady();
+    } catch (e) { toast.error(`Couldn't create watch: ${msg(e)}`); }
   }
 
   async function reviewAuto(r: AutoResult) {
-    setTitle(r.result.job.title || r.title);
-    showResults(r.result);
-    setRunId(null);
+    resetFilters();
+    setRun({ data: r.result, runId: null, files: [], title: r.result.job.title || r.title, source: "auto", at: r.created_at });
     toast.info(`Loaded auto-screened batch from “${r.label_name}”.`);
-  }
-  async function saveAuto(r: AutoResult) {
-    if (!(configured && user)) return toast.error("Sign in with history enabled to save.");
-    try {
-      const id = await saveRun(user.id, r.result.job.title || r.title, "auto", r.result, null);
-      await ackAutoResult(r.id);
-      setAutoResults((xs) => xs.filter((x) => x.id !== r.id));
-      if (data === r.result) setRunId(id);
-      toast.success("Saved to history.");
-    } catch (e) {
-      toast.error(`Save failed: ${msg(e)}`);
+    nav("/shortlist");
+    if (configured && user) {
+      try {
+        const id = await saveRun(user.id, r.result.job.title || r.title, "auto", r.result, null);
+        await ackAutoResult(r.id);
+        setAutoResults((xs) => xs.filter((x) => x.id !== r.id));
+        setRun((cur) => (cur && cur.data === r.result ? { ...cur, runId: id } : cur));
+        refreshReady();
+      } catch (e) { toast.error(`Save failed: ${msg(e)}`); }
     }
   }
   async function dismissAuto(r: AutoResult) {
     await ackAutoResult(r.id).catch(() => {});
     setAutoResults((xs) => xs.filter((x) => x.id !== r.id));
+    refreshReady();
   }
 
   async function doAnalyze() {
@@ -180,7 +153,6 @@ export default function Dashboard() {
     setAnalyzing(true);
     try { setJd(await analyzeJD(title, description)); } catch (e) { toast.error(`Analysis failed: ${msg(e)}`); } finally { setAnalyzing(false); }
   }
-
   async function doSaveJob() {
     if (!(configured && user)) return toast.error("Sign in with history enabled to save jobs.");
     if (!hasJD) return toast.error("Add a job description first.");
@@ -206,169 +178,172 @@ export default function Dashboard() {
     catch (e) { toast.error(`Delete failed: ${msg(e)}`); }
   }
 
-  async function doExport(rows: ExportCandidate[]) {
-    if (!data) return;
-    setExporting(true);
-    const id = toast.loading("Building Excel file…");
-    try { await exportExcel(rows, data.job.title || title); toast.update(id, "success", `Exported ${rows.length} candidate(s).`); }
-    catch (e) { toast.update(id, "error", `Export failed: ${msg(e)}`, 6000); }
-    finally { setExporting(false); }
-  }
-
   const wTotal = Object.values(weights).reduce((a, b) => a + b, 0) || 1;
+  const pct = (k: keyof Weights) => Math.round((weights[k] / wTotal) * 100);
+  const avg = useMemo(() => run?.data.top.length ? Math.round((run.data.top.reduce((s, c) => s + c.score, 0) / run.data.top.length) * 10) / 10 : 0, [run]);
+  const fileCount = files.length;
 
   return (
-    <main className="page">
-      <ScreeningOverlay open={loading} label={source === "gmail" ? "Fetching & screening from Gmail" : `Screening ${files.length || ""} resume${files.length === 1 ? "" : "s"}`} />
-      <div className="page-head">
-        <h1>Welcome back, {firstName} <span className="wave">👋</span></h1>
-        <p>
-          Define the role, add resumes from your device or a Gmail label, and get a transparent, ranked shortlist to review and export.
-          {gmailConnected && <span className="inline-pill">● Gmail connected</span>}
-          {semanticReady === true && <span className="inline-pill">● Semantic AI ready</span>}
-          {semanticReady === false && <span className="inline-pill warn">Semantic model unavailable — lexical mode</span>}
-        </p>
-      </div>
+    <div className="page narrow stack">
+      <ScreeningOverlay open={loading} label={source === "gmail" ? "Fetching & screening from Gmail" : `Screening ${fileCount || ""} resume${fileCount === 1 ? "" : "s"}`} />
 
-      {autoResults.length > 0 && (
-        <motion.div className="banner" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-          <div className="banner-title">
-            <BellRing size={16} /> <b>{autoResults.length} new auto-screened batch{autoResults.length === 1 ? "" : "es"}</b>
-            <span className="muted"> — new applications arrived in your watched Gmail labels.</span>
+      <Sidebar>
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <Eyebrow>Scoring weights</Eyebrow>
+            <button className="link-btn muted small" onClick={() => setTune((t) => !t)} style={{ marginBottom: 10 }}>{tune ? "Done" : "Tune"}</button>
           </div>
-          <div className="banner-list">
-            {autoResults.slice(0, 3).map((r) => (
-              <div key={r.id} className="banner-item">
-                <span>{r.title} · {r.result.fetched} resume{r.result.fetched === 1 ? "" : "s"} · {new Date(r.created_at).toLocaleString()}</span>
-                <span className="head-actions">
-                  <button className="btn btn-primary sm" onClick={() => reviewAuto(r)}>Review</button>
-                  <button className="btn btn-ghost sm" onClick={() => saveAuto(r)}>Save to history</button>
-                  <button className="link-btn" onClick={() => dismissAuto(r)}>Dismiss</button>
-                </span>
+          <div className="weights">
+            {(Object.keys(W_LABEL) as (keyof Weights)[]).map((k) => (
+              <div key={k} className="weight-row">
+                <div className="l"><span>{W_LABEL[k]}</span><b>{pct(k)}%</b></div>
+                <ProgressBar value={pct(k)} tone="amber" />
+                {tune && <input type="range" className="range" min={0} max={70} value={weights[k]} onChange={(e) => setWeights({ ...weights, [k]: Number(e.target.value) })} aria-label={`${W_LABEL[k]} weight`} />}
               </div>
             ))}
           </div>
-        </motion.div>
+          {tune && <button className="link-btn muted small" style={{ marginTop: 10 }} onClick={() => setWeights(DEFAULT_W)}>Reset to defaults</button>}
+          {suggestion && (
+            <div className="suggest">
+              <div className="t"><Sparkles size={14} /> Learned from your decisions</div>
+              <p>From {suggestion.positives} advanced and {suggestion.negatives} rejected candidates, {describeSuggestion(suggestion.weights, weights)} would better match how you actually decide.</p>
+              <button className="btn btn-ghost sm" onClick={() => { setWeights(suggestion.weights); toast.success("Suggested weights applied."); }}>Apply suggestion</button>
+            </div>
+          )}
+        </div>
+        <div>
+          <Eyebrow>Shortlist size</Eyebrow>
+          <div className="ctx-range">
+            <div className="l"><span>Top candidates to keep</span><b>{topN}</b></div>
+            <input type="range" className="range" min={1} max={50} value={Math.min(topN, 50)} onChange={(e) => setTopN(Number(e.target.value))} aria-label="Shortlist size" />
+          </div>
+        </div>
+        {!configured && (
+          <div className="notice"><b>History off.</b> Add Supabase keys to <code>frontend/.env</code> to save runs, jobs, statuses and notes.</div>
+        )}
+      </Sidebar>
+
+      <div className="stats-4">
+        <StatCard tone="blue" title="Resumes screened" value={run?.data.total_resumes ?? 0} sub={run ? "last run" : "no runs yet"} icon={<FileSearch size={20} />} />
+        <StatCard tone="amber" title="Shortlisted" value={run?.data.top.length ?? 0} sub="top-N kept" icon={<ListOrdered size={20} />} />
+        <StatCard tone="emerald" title="Average score" value={avg} decimals={1} sub="across the shortlist" icon={<TrendingUp size={20} />} />
+        <StatCard tone="purple" title="Auto-screen watches" value={ready?.watches ?? 0} sub={`${ready?.unacked_auto_results ?? 0} new result${(ready?.unacked_auto_results ?? 0) === 1 ? "" : "s"}`} icon={<Target size={20} />} />
+      </div>
+
+      {autoResults.length > 0 && (
+        <div className="banner fade-in" role="status">
+          <BellRing size={18} />
+          <div className="banner-body">
+            <div className="banner-title">{autoResults.length} new auto-screened batch{autoResults.length === 1 ? "" : "es"}</div>
+            <div className="banner-sub ellipsis">{autoResults.slice(0, 2).map((r) => `${r.title} · ${r.result.fetched} resume${r.result.fetched === 1 ? "" : "s"}`).join(" · and ")}</div>
+          </div>
+          <div className="banner-actions">
+            <button className="btn btn-primary sm" onClick={() => reviewAuto(autoResults[0])}>Review</button>
+            <button className="btn btn-secondary sm" onClick={() => dismissAuto(autoResults[0])}>Dismiss</button>
+          </div>
+        </div>
       )}
 
-      <div className="workspace">
-        <section className="col-main">
-          <div className="panel">
-            <div className="panel-head">
-              <h2>Role details</h2>
-              <div className="head-actions">
-                {configured && (
-                  <>
-                    <select className="input tb-select" value={jobId} onChange={(e) => loadJob(e.target.value)}>
-                      <option value="">Saved jobs…</option>
-                      {jobs.map((j) => <option key={j.id} value={j.id}>{j.title}</option>)}
-                    </select>
-                    <button className="btn btn-ghost sm" onClick={doSaveJob} disabled={!hasJD}>{jobId ? <BookmarkCheck size={14} /> : <Bookmark size={14} />} {jobId ? "Update job" : "Save job"}</button>
-                    {jobId && <button className="btn btn-ghost sm danger icon-only" onClick={removeJob} title="Delete job"><Trash2 size={14} /></button>}
-                  </>
-                )}
-                <button className="btn btn-ghost sm" onClick={doAnalyze} disabled={!hasJD || analyzing}><Wand2 size={14} /> {analyzing ? "Analyzing…" : "Analyze JD"}</button>
-              </div>
-            </div>
-            <JobForm title={title} description={description} topN={topN} onTitle={(v) => { setTitle(v); setJd(null); }} onDescription={(v) => { setDescription(v); setJd(null); }} onTopN={setTopN} bare />
-            {jd && (
-              <div className={`jd-report grade-${jd.grade}`}>
-                <div className="jd-head">
-                  <span className="jd-grade">{jd.grade}</span>
-                  <div>
-                    <b>JD quality {jd.score}/100</b>
-                    <div className="muted small">{jd.stats.words} words · {jd.stats.requirements} requirements detected{jd.stats.years_specified ? ` · ${jd.stats.years_specified}+ yrs` : ""}</div>
-                  </div>
-                </div>
-                {jd.issues.length === 0 ? <p className="muted small">No issues — this JD will screen well.</p> : (
-                  <ul className="jd-issues">
-                    {jd.issues.map((i, k) => <li key={k} className={`sev-${i.severity}`}><b>{i.message}</b> <span className="muted">{i.suggestion}</span></li>)}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="panel">
-            <div className="panel-head">
-              <h2>Add resumes</h2>
-              <div className="segmented" role="tablist">
-                <button className={source === "upload" ? "seg on" : "seg"} onClick={() => setSource("upload")}><Upload size={14} /> Upload files</button>
-                <button className={source === "gmail" ? "seg on" : "seg"} onClick={() => setSource("gmail")}><Mail size={14} /> From Gmail</button>
-              </div>
-            </div>
-            <motion.div key={source} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
-              {source === "upload" ? (
+      <div className="grid-2">
+        <section className="card">
+          <div className="card-head">
+            <h2>Describe the role</h2>
+            <div className="actions">
+              {configured && (
                 <>
-                  <UploadZone files={files} onFiles={setFilesToasted} />
-                  <button className="btn btn-primary full lg" onClick={runUpload} disabled={loading}>
-                    <ScanLine size={17} /> {loading ? "Screening…" : `Screen ${files.length || ""} resume${files.length === 1 ? "" : "s"}`}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <GmailPanel labelId={labelId} unreadOnly={unreadOnly} markRead={markRead}
-                    onLabel={(id, name) => { setLabelId(id); if (name) setLabelName(name); }}
-                    onUnreadOnly={setUnreadOnly} onMarkRead={setMarkRead}
-                    onConnectedChange={(c) => setGmailConnected(c)} />
-                  <button className="btn btn-primary full lg" onClick={runGmail} disabled={loading || !gmailConnected}>
-                    <ScanLine size={17} /> {loading ? "Screening…" : "Screen resumes from Gmail"}
-                  </button>
-                  {gmailConnected && (
-                    <div className="watch-row">
-                      <div className="watch-title">
-                        <Radar size={16} /> <b>Auto-screen this label</b>
-                        <div className="muted small">Check for new applications automatically and notify you here.</div>
-                      </div>
-                      <label className="watch-int">every <input className="input topn-num sm" type="number" min={2} max={1440} value={watchInterval} onChange={(e) => setWatchInterval(Math.max(2, Number(e.target.value) || 15))} /> min</label>
-                      <button className="btn btn-ghost sm" onClick={createWatch} disabled={!hasJD || !labelId}><Play size={13} /> Turn on</button>
-                    </div>
-                  )}
+                  <select className="input" style={{ height: 34, width: 150, fontSize: 12.5, borderRadius: 9 }} value={jobId} onChange={(e) => loadJob(e.target.value)} aria-label="Saved jobs">
+                    <option value="">Saved jobs…</option>
+                    {jobs.map((j) => <option key={j.id} value={j.id}>{j.title}</option>)}
+                  </select>
+                  <button className="btn btn-ghost sm" onClick={doSaveJob} disabled={!hasJD}>{jobId ? <BookmarkCheck size={13} /> : <Bookmark size={13} />} {jobId ? "Update" : "Save"}</button>
+                  {jobId && <button className="btn btn-ghost sm danger icon-only" onClick={removeJob} title="Delete job" aria-label="Delete job"><Trash2 size={13} /></button>}
                 </>
               )}
-            </motion.div>
+              <button className="btn btn-ghost sm" onClick={doAnalyze} disabled={!hasJD || analyzing}><Wand2 size={13} /> {analyzing ? "Analyzing…" : "Analyze JD"}</button>
+            </div>
           </div>
+          <div className="field">
+            <label className="field-label" htmlFor="job-title">Job title</label>
+            <input id="job-title" className="input" placeholder="e.g. Senior AI Engineer" value={title} onChange={(e) => { setTitle(e.target.value); setJd(null); }} />
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="job-desc">Job description</label>
+            <textarea id="job-desc" className="input textarea" rows={7}
+              placeholder="Paste the full job description. Use “must have” for critical skills, “nice to have” for optional ones, and “X or Y” for alternatives."
+              value={description} onChange={(e) => { setDescription(e.target.value); setJd(null); }} />
+          </div>
+          {jd && (
+            <div className={`jd-report grade-${jd.grade}`}>
+              <span className="jd-grade">{jd.grade}</span>
+              <div className="jd-body">
+                <b className="t">JD quality {jd.score}/100</b>
+                <div className="m">{jd.stats.words} words · {jd.stats.requirements} requirements detected{jd.stats.years_specified ? ` · ${jd.stats.years_specified}+ yrs` : ""}</div>
+                {jd.issues.length === 0
+                  ? <div className="jd-issue"><b style={{ color: "var(--success)" }}>No issues.</b> This JD will screen well.</div>
+                  : jd.issues.map((i, k) => <div key={k} className={`jd-issue sev-${i.severity}`}><b>{i.message}</b> {i.suggestion}</div>)}
+              </div>
+            </div>
+          )}
         </section>
 
-        <aside className="col-side">
-          <div className="panel how">
-            <div className="panel-head tight">
-              <h3><SlidersHorizontal size={15} /> Scoring weights</h3>
-              <button className="link-btn" onClick={() => setAdvanced((a) => !a)}>{advanced ? "Done" : "Tune"}</button>
-            </div>
-            <ul>
-              {(Object.keys(W_LABEL) as (keyof Weights)[]).map((k) => (
-                <li key={k} className={advanced ? "editing" : ""}>
-                  <b>{W_LABEL[k]}</b>
-                  {advanced && <input type="range" min={0} max={70} value={weights[k]} className="slider w-slider" onChange={(e) => setWeights({ ...weights, [k]: Number(e.target.value) })} />}
-                  <span>{Math.round((weights[k] / wTotal) * 100)}%</span>
-                </li>
-              ))}
-            </ul>
-            {advanced && <button className="link-btn" onClick={() => setWeights(DEFAULT_W)}>Reset to defaults</button>}
-            {suggestion && (
-              <div className="suggest">
-                <b><Sparkles size={14} /> Learned from your decisions</b>
-                <p className="muted small">Based on {suggestion.positives} advanced and {suggestion.negatives} rejected candidates, these weights would better match how you actually decide.</p>
-                <div className="tags sm">{(Object.keys(W_LABEL) as (keyof Weights)[]).map((k) => <span key={k} className="tag neutral">{W_LABEL[k]} {suggestion.weights[k]}%</span>)}</div>
-                <button className="btn btn-ghost sm" onClick={() => { setWeights(suggestion.weights); toast.success("Suggested weights applied."); }}><Save size={13} /> Apply</button>
-              </div>
-            )}
-            <p className="how-note">Hybrid engine: on-device semantic matching + must-have skill gating (with “A or B” alternatives) + BM25 relevance + date-based experience. Fully offline.</p>
+        <section className="card col">
+          <div className="card-head">
+            <h2>Add resumes</h2>
+            <SegTabs small value={source} onChange={setSource} items={[
+              { value: "upload", label: <><Upload size={13} /> Upload</> },
+              { value: "gmail", label: <><Mail size={13} /> Gmail</> },
+            ]} />
           </div>
-          {!configured && (
-            <div className="panel warn-panel"><b>History off</b><p>Add Supabase keys to <code>frontend/.env</code> to save runs, jobs, statuses and notes.</p></div>
+          <div key={source} className="fade-in source-body" style={{ flex: 1 }}>
+            {source === "upload" ? (
+              <UploadZone files={files} onFiles={(next) => { const added = next.length - files.length; setFiles(next); if (added > 0) toast.info(`Added ${added} file${added === 1 ? "" : "s"}`); }} />
+            ) : (
+              <>
+                <GmailPanel labelId={labelId} unreadOnly={unreadOnly} markRead={markRead}
+                  onLabel={(id, name) => { setLabelId(id); if (name) setLabelName(name); }}
+                  onUnreadOnly={setUnreadOnly} onMarkRead={setMarkRead}
+                  onConnectedChange={(c) => setGmailConnected(c)} />
+                {gmailConnected && (
+                  <div className="watch-row">
+                    <div className="watch-main">
+                      <b><Radar size={14} style={{ verticalAlign: -2, color: "var(--accent-text)" }} /> Auto-screen this label</b>
+                      <div className="m">Check for new applications automatically and notify you here.</div>
+                    </div>
+                    <label className="watch-int">every <input className="input num-input sm" type="number" min={2} max={1440} value={watchInterval} onChange={(e) => setWatchInterval(Math.max(2, Number(e.target.value) || 15))} aria-label="Interval in minutes" /> min</label>
+                    <button className="btn btn-ghost sm" onClick={createWatch} disabled={!hasJD || !labelId}><Play size={13} /> Turn on</button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <div style={{ flex: 1, minHeight: 18 }} />
+          {source === "upload" ? (
+            <button className="btn btn-primary full lg" style={{ marginTop: 18 }} onClick={runUpload} disabled={loading}>
+              <ScanLine size={17} /> {loading ? "Screening…" : `Screen ${fileCount || ""} resume${fileCount === 1 ? "" : "s"}`}
+            </button>
+          ) : (
+            <button className="btn btn-primary full lg" style={{ marginTop: 18 }} onClick={runGmail} disabled={loading || !gmailConnected}>
+              <ScanLine size={17} /> {loading ? "Screening…" : "Screen resumes from Gmail"}
+            </button>
           )}
-        </aside>
+        </section>
       </div>
 
-      <div id="results">
-        {data && (data.top.length > 0 || (data.flagged?.length ?? 0) > 0) && (
-          <Results data={data} runId={runId} files={dataFiles} canSend={canSend} onExport={doExport} exporting={exporting} />
-        )}
-      </div>
-    </main>
+      {run && (
+        <div className="notice-row" style={{ marginTop: 0 }}>
+          <Save size={15} />
+          <span>Last run: <b>{run.title || run.data.job.title}</b> — {run.data.total_resumes} screened, {run.data.top.length} shortlisted.</span>
+          <span className="grow" />
+          <button className="link-btn" onClick={() => nav("/shortlist")}>Open shortlist →</button>
+        </div>
+      )}
+    </div>
   );
 }
 
+function describeSuggestion(s: Weights, cur: Weights) {
+  const keys = Object.keys(s) as (keyof Weights)[];
+  const up = keys.filter((k) => s[k] > cur[k]).sort((a, b) => (s[b] - cur[b]) - (s[a] - cur[a]))[0];
+  return up ? `weighting ${W_LABEL[up].toLowerCase()} higher` : "these weights";
+}
 function msg(e: unknown) { return e instanceof Error ? e.message : "unknown error"; }
