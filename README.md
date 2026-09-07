@@ -134,6 +134,15 @@ Permissions: read attachments + mark-as-read, and (optional) **send** for emaili
 candidates. If you connected before sending was added, use **Settings → Reconnect to
 enable sending**.
 
+**Hosted (Render):** a server has no browser, so the sign-in must happen on a desktop.
+Connect once locally, then in the Render dashboard add `backend/credentials.json` and
+`backend/token.json` as **Secret Files** (they mount at `/etc/secrets/`) and set
+`GMAIL_CREDENTIALS_FILE=/etc/secrets/credentials.json`,
+`GMAIL_TOKEN_FILE=/etc/secrets/token.json` (the Blueprint already does). The secrets
+mount is read-only, so refreshed tokens are kept in a working copy under `DATA_DIR`.
+To switch the connected account or add the send permission, redo the local connect
+and replace the `token.json` secret.
+
 ---
 
 ## Deploy with Docker

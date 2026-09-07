@@ -193,7 +193,7 @@ def gmail_status() -> dict:
 def gmail_connect() -> dict:
     try:
         email = gmail_client.connect()
-    except gmail_client.GmailNotConfigured as e:
+    except (gmail_client.GmailNotConfigured, gmail_client.GmailNotConnected) as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"Gmail connection failed: {e}")
@@ -202,7 +202,10 @@ def gmail_connect() -> dict:
 
 @app.post("/api/gmail/disconnect")
 def gmail_disconnect() -> dict:
-    gmail_client.disconnect()
+    try:
+        gmail_client.disconnect()
+    except PermissionError as e:
+        raise HTTPException(400, str(e))
     return {"connected": False}
 
 
