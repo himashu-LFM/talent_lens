@@ -18,6 +18,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from app.config import DATA_DIR
+
 # modify: read + mark-as-read; send: email candidates from the app.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
@@ -28,6 +30,13 @@ _HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 # Paths can be overridden for hosted deployments (e.g. Render "Secret Files").
 CREDENTIALS_FILE = os.getenv("GMAIL_CREDENTIALS_FILE", os.path.join(_HERE, "credentials.json"))
 TOKEN_FILE = os.getenv("GMAIL_TOKEN_FILE", os.path.join(_HERE, "token.json"))
+# Hosted secret mounts (Render's /etc/secrets) are read-only, but Google rotates the
+# access token hourly and we must persist the refreshed copy. When TOKEN_FILE's
+# directory isn't writable, the seed token is copied to DATA_DIR and that copy is
+# used from then on; the secret file is only ever read.
+_WORK_TOKEN_FILE = os.path.join(DATA_DIR, "gmail_token.json")
+# True on Render (it sets RENDER=true) or wherever no browser can be opened.
+HEADLESS = os.getenv("GMAIL_HEADLESS", "").lower() in ("1", "true", "yes") or bool(os.getenv("RENDER"))
 
 RESUME_EXTS = (".pdf", ".docx", ".txt")
 
@@ -44,12 +53,28 @@ def credentials_present() -> bool:
     return os.path.exists(CREDENTIALS_FILE)
 
 
+def _token_dir_writable() -> bool:
+    d = os.path.dirname(os.path.abspath(TOKEN_FILE)) or "."
+    return os.path.isdir(d) and os.access(d, os.W_OK)
+
+
+def _token_path() -> str | None:
+    """The token file to read: a writable working copy if one exists, else the
+    configured TOKEN_FILE (which may live on a read-only secrets mount)."""
+    if os.path.exists(_WORK_TOKEN_FILE) and not _token_dir_writable():
+        return _WORK_TOKEN_FILE
+    if os.path.exists(TOKEN_FILE):
+        return TOKEN_FILE
+    return _WORK_TOKEN_FILE if os.path.exists(_WORK_TOKEN_FILE) else None
+
+
 def _load_cached_creds() -> Credentials | None:
-    if not os.path.exists(TOKEN_FILE):
+    path = _token_path()
+    if not path:
         return None
     # Use the scopes actually stored in the token (don't force the new SCOPES list,
     # or refreshing an older token would fail). can_send() checks for 'send'.
-    creds = Credentials.from_authorized_user_file(TOKEN_FILE)
+    creds = Credentials.from_authorized_user_file(path)
     if creds and creds.expired and creds.refresh_token:
         creds.refresh(Request())
         _save(creds)
@@ -66,9 +91,21 @@ def can_send() -> bool:
 
 
 def disconnect() -> None:
-    """Forget the cached token so the user can re-authorise (e.g. for new scopes)."""
-    if os.path.exists(TOKEN_FILE):
-        os.remove(TOKEN_FILE)
+    """Forget the cached token so the user can re-authorise (e.g. for new scopes).
+    A read-only seed token (secrets mount) cannot be removed; say so rather than fail."""
+    removed = False
+    for path in (_WORK_TOKEN_FILE, TOKEN_FILE):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                removed = True
+            except OSError:
+                pass
+    if os.path.exists(TOKEN_FILE) and not removed:
+        raise PermissionError(
+            "The Gmail token on this server is a read-only secret file. "
+            "Replace it in the hosting dashboard to change the connected account."
+        )
 
 
 def send_email(to: str, subject: str, body: str) -> str:
@@ -91,7 +128,9 @@ def send_email(to: str, subject: str, body: str) -> str:
 
 
 def _save(creds: Credentials) -> None:
-    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+    target = TOKEN_FILE if _token_dir_writable() else _WORK_TOKEN_FILE
+    os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
+    with open(target, "w", encoding="utf-8") as f:
         f.write(creds.to_json())
 
 
@@ -111,6 +150,12 @@ def connect() -> str:
         )
     creds = _load_cached_creds()
     if creds is None:
+        if HEADLESS:
+            raise GmailNotConnected(
+                "Interactive Google sign-in isn't available on this server. Connect Gmail "
+                "once on a desktop (it writes backend/token.json), then upload that file as "
+                "the GMAIL_TOKEN_FILE secret and redeploy."
+            )
         flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
         creds = flow.run_local_server(port=0)
         _save(creds)
