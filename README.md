@@ -39,6 +39,15 @@ and export. No LLM API key required.
 - **Auto-screen watches** — the backend polls a label every N minutes, screens new
   applications, and surfaces them as a banner on the dashboard
 
+### Workspace
+- **App shell** — icon rail (Screen · Shortlist · History · Pool · Insights · Settings), a context
+  sidebar that changes per screen (scoring weights while defining a role; filters, pipeline counts
+  and requirements on the shortlist; search + top skills in the pool) and a glass header with the
+  command palette
+- **Screen** — gradient KPI cards, auto-screen banner, describe-the-role and add-resumes cards;
+  finishing a run opens the **Shortlist** page, which also re-opens any run from History
+- Dark-first slate + amber design system with a full light theme; Inter, Lucide icons
+
 ### Review workflow
 - **Candidate detail drawer** — click any row (or press ↵) for a split-screen view: animated
   match-score ring, AI brief, score breakdown, "what would raise this score", evidence,

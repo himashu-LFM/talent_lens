@@ -11,8 +11,8 @@ export default class ErrorBoundary extends Component<{ children: ReactNode }, St
     if (!this.state.error) return this.props.children;
     return (
       <div className="boot">
-        <div className="panel crash">
-          <div className="empty-icon warn"><AlertOctagon size={28} /></div>
+        <div className="card crash">
+          <div className="empty-icon"><AlertOctagon size={28} /></div>
           <h2>Something went wrong</h2>
           <p className="muted">The page hit an unexpected error. Your data is safe — reload to continue.</p>
           <pre>{this.state.error.message}</pre>

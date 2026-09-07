@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+/* Ranked results: table · requirements heatmap · pipeline board, with statuses, notes,
+   bulk actions, compare, email, inline viewer and the candidate drawer. Filter state
+   (query / min score / status / anonymize / view) comes from the Workspace context so
+   the sidebar can drive it. */
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "framer-motion";
-import { Columns3, Download, EyeOff, Grid3X3, KanbanSquare, Printer, Send, Table2 } from "lucide-react";
-import { Num } from "./ui";
+import { AnimatePresence } from "framer-motion";
+import { AlertTriangle, ChevronRight, Columns3, Download, Grid3X3, KanbanSquare, Printer, Send, Table2 } from "lucide-react";
 import CandidateDrawer from "./CandidateDrawer";
+import { Badge, SegTabs, scoreClass, statusVariant } from "./ds";
 import type { Candidate, ExportCandidate, ScreenResponse } from "../api";
 import { gmailSend } from "../api";
 import { useAuth } from "../auth/AuthProvider";
+import { useWorkspace, type View } from "../context/Workspace";
 import { useToast } from "./Toast";
 import {
   STATUSES, bulkUpsertReviews, candidateKey, listReviews, priorAppearances, upsertReview,
@@ -20,17 +25,15 @@ interface Props {
   canSend?: boolean;
   onExport: (rows: ExportCandidate[]) => void;
   exporting: boolean;
+  onCounts?: (c: Record<ReviewStatus, number>) => void;
+  exportIcon?: ReactNode;
 }
-
-type SortKey = "score" | "experience" | "name";
-type View = "table" | "heatmap" | "board";
 
 const STATUS_LABEL: Record<ReviewStatus, string> = {
   new: "New", shortlisted: "Shortlisted", interview: "Interview", rejected: "Rejected", hired: "Hired",
 };
-const scoreClass = (s: number) => (s >= 70 ? "high" : s >= 40 ? "mid" : "low");
 
-function requirementUnits(data: ScreenResponse): { label: string; members: string[] }[] {
+export function requirementUnits(data: ScreenResponse): { label: string; members: string[] }[] {
   const groups = data.job.alternative_groups ?? [];
   const grouped = new Set(groups.flat());
   const units = data.job.required_skills.filter((s) => !grouped.has(s)).map((s) => ({ label: s, members: [s] }));
@@ -39,16 +42,12 @@ function requirementUnits(data: ScreenResponse): { label: string; members: strin
   return units;
 }
 
-export default function Results({ data, runId, files, canSend, onExport, exporting }: Props) {
+export default function Results({ data, runId, files, canSend, onExport, exporting, onCounts }: Props) {
   const toast = useToast();
   const { user, configured } = useAuth();
+  const { filters, setFilters } = useWorkspace();
+  const { query, minScore, status: statusFilter, anon, view, sort: sortKey } = filters;
 
-  const [view, setView] = useState<View>("table");
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | ReviewStatus>("all");
-  const [minScore, setMinScore] = useState(0);
-  const [sortKey, setSortKey] = useState<SortKey>("score");
-  const [anon, setAnon] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [compare, setCompare] = useState(false);
   const [reviews, setReviews] = useState<Map<string, Review>>(new Map());
@@ -78,7 +77,6 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
     next.set(key, { ...(reviews.get(key) ?? emptyReview(runId ?? "", key, c)), ...patch });
     setReviews(next);
   }
-
   async function setStatus(c: Candidate, status: ReviewStatus, quiet = false) {
     setLocal(c, { status });
     if (!canPersist) { if (!quiet) toast.info("Status set locally — enable history (Supabase) to save.", 3500); return; }
@@ -87,7 +85,6 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
       if (!quiet) toast.success(`${displayName(c)} → ${STATUS_LABEL[status]}`, 2500);
     } catch (e) { toast.error(`Couldn't save status: ${msg(e)}`); }
   }
-
   async function bulkStatus(cands: Candidate[], status: ReviewStatus) {
     if (!cands.length) return;
     const next = new Map(reviews);
@@ -100,7 +97,6 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
     toast.success(`${cands.length} candidate${cands.length === 1 ? "" : "s"} → ${STATUS_LABEL[status]}`);
     setSelected(new Set());
   }
-
   async function saveNotes(c: Candidate, notes: string) {
     setLocal(c, { notes });
     if (!canPersist) return;
@@ -124,6 +120,11 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, query, statusFilter, minScore, sortKey, reviews]);
 
+  const counts = useMemo(() => STATUSES.reduce((acc, s) => ({ ...acc, [s]: data.top.filter((c) => statusOf(c) === s).length }), {} as Record<ReviewStatus, number>),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, reviews]);
+  useEffect(() => { onCounts?.(counts); }, [counts, onCounts]);
+
   useEffect(() => { if (drawerIdx !== null && drawerIdx >= rows.length) setDrawerIdx(rows.length ? rows.length - 1 : null); }, [rows, drawerIdx]);
 
   // keyboard shortcuts
@@ -141,14 +142,14 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
       else if (e.key === "r" && c) setStatus(c, "rejected");
       else if (e.key === "i" && c) setStatus(c, "interview");
       else if ((e.key === "e" || e.key === "Enter") && c && drawerIdx === null) setDrawerIdx(idx);
-      else if (e.key === "a") setAnon((x) => !x);
+      else if (e.key === "a") setFilters({ anon: !anon });
       else return;
       e.preventDefault();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, active, view, reviews, drawerIdx]);
+  }, [rows, active, view, reviews, drawerIdx, anon]);
 
   const selectedCands = data.top.filter((c) => selected.has(candidateKey(c)));
   function toggleSelect(c: Candidate) {
@@ -161,155 +162,122 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
     if (!f) return toast.info("Original file isn't available for this candidate (Gmail/history runs).", 4000);
     setViewFile({ url: URL.createObjectURL(f), name: f.name });
   }
+  function open(idx: number) { setActive(idx); setDrawerIdx(idx); }
 
   const units = useMemo(() => requirementUnits(data), [data]);
-  const avg = data.top.length ? Math.round((data.top.reduce((s, c) => s + c.score, 0) / data.top.length) * 10) / 10 : 0;
   const flagged = data.flagged ?? [];
-  const counts = STATUSES.reduce((acc, s) => ({ ...acc, [s]: data.top.filter((c) => statusOf(c) === s).length }), {} as Record<ReviewStatus, number>);
   const drawerCand = drawerIdx !== null ? rows[drawerIdx] : null;
+  const tag = (c: Candidate) => {
+    const pr = prior.get((c.email || "").toLowerCase()) ?? 0;
+    if (pr > 0) return <span className="mini-tag" title={`Appeared in ${pr} previous run(s)`}>re-applicant ×{pr}</span>;
+    if (c.duplicate_group) return <span className="mini-tag warn" title="Looks like the same person as another candidate">dup?</span>;
+    if ((c.confidence ?? 1) < 0.6) return <span className="mini-tag danger" title="Low resume-structure confidence">check</span>;
+    return null;
+  };
 
   return (
-    <motion.section className="panel results" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
-      <div className="panel-head">
-        <div>
-          <h2>Shortlist</h2>
-          <p className="results-sub">
-            {data.total_resumes} screened · {data.top.length} shortlisted
-            {flagged.length ? ` · ${flagged.length} excluded as non-resumes` : ""}{runId ? " · saved to history" : ""}
-            <span className="kbd-hint"> · <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>↵</kbd> open · <kbd>s</kbd> shortlist · <kbd>r</kbd> reject · <kbd>i</kbd> interview · <kbd>a</kbd> anonymize</span>
-          </p>
-        </div>
-        <div className="head-actions">
-          <div className="segmented small" role="tablist">
-            {(["table", "heatmap", "board"] as View[]).map((v) => (
-              <button key={v} role="tab" aria-selected={view === v} className={view === v ? "seg on" : "seg"} onClick={() => setView(v)}>
-                {v === "table" ? <Table2 size={14} /> : v === "heatmap" ? <Grid3X3 size={14} /> : <KanbanSquare size={14} />}
-                {v === "table" ? "Table" : v === "heatmap" ? "Heatmap" : "Pipeline"}
-              </button>
-            ))}
-          </div>
-          <label className={`pill-toggle ${anon ? "on" : ""}`}><input type="checkbox" checked={anon} onChange={(e) => setAnon(e.target.checked)} /><EyeOff size={14} /><span>{anon ? "Anonymized" : "Anonymize"}</span></label>
-          <button className="btn btn-ghost sm" disabled={selectedCands.length < 2 || selectedCands.length > 3} onClick={() => setCompare(true)}><Columns3 size={14} /> Compare {selectedCands.length ? `(${selectedCands.length})` : ""}</button>
-          <button className="btn btn-ghost sm" onClick={() => window.print()}><Printer size={14} /> Print</button>
-          <button className="btn btn-ghost sm" onClick={doExport} disabled={exporting}><Download size={14} /> {exporting ? "Exporting…" : "Export Excel"}</button>
-        </div>
-      </div>
-
-      <div className="stats">
-        <div className="stat"><div className="stat-num"><Num value={data.total_resumes} /></div><div className="stat-label">Resumes screened</div></div>
-        <div className="stat"><div className="stat-num"><Num value={data.top.length} /></div><div className="stat-label">Shortlisted</div></div>
-        <div className="stat"><div className="stat-num accent"><Num value={avg} decimals={1} /></div><div className="stat-label">Avg. score</div></div>
-        <div className="stat"><div className="stat-num">{counts.shortlisted + counts.interview + counts.hired}</div><div className="stat-label">Advanced · {counts.rejected} rejected</div></div>
-        <div className="stat grow">
-          <div className="stat-label">Requirements ({units.length})</div>
-          <div className="tags sm">
-            {units.map((u) => <span key={u.label} className={`tag neutral ${u.members.length > 1 ? "or" : ""}`}>{u.label}</span>)}
-            {!units.length && <span className="muted">none detected — add specific skills to the JD</span>}
-          </div>
-        </div>
-      </div>
-
+    <section aria-label="Shortlist results">
       <div className="toolbar">
-        <input className="input tb-search" placeholder="Search name, email, skill…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search candidates" />
-        <select className="input tb-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} aria-label="Filter by status">
-          <option value="all">All statuses</option>
-          {STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]} ({counts[s]})</option>)}
-        </select>
-        <select className="input tb-select" value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} aria-label="Sort">
+        <SegTabs<View> surface value={view} onChange={(v) => setFilters({ view: v })} items={[
+          { value: "table", label: <><Table2 size={14} /> Table</> },
+          { value: "heatmap", label: <><Grid3X3 size={14} /> Heatmap</> },
+          { value: "board", label: <><KanbanSquare size={14} /> Pipeline</> },
+        ]} />
+        <select className="input" style={{ width: 150, height: 38, fontSize: 12.5 }} value={sortKey} onChange={(e) => setFilters({ sort: e.target.value as typeof sortKey })} aria-label="Sort">
           <option value="score">Sort: Score</option><option value="experience">Sort: Experience</option><option value="name">Sort: Name</option>
         </select>
-        <label className="tb-range"><span>Min score <b>{minScore}</b></span><input type="range" min={0} max={100} value={minScore} onChange={(e) => setMinScore(Number(e.target.value))} className="slider" /></label>
+        <div className="grow" />
+        <span className="kbd-hint"><kbd>j</kbd> <kbd>k</kbd> move · <kbd>↵</kbd> open · <kbd>s</kbd> shortlist · <kbd>r</kbd> reject</span>
+        <button className="btn btn-ghost sm" disabled={selectedCands.length < 2 || selectedCands.length > 3} onClick={() => setCompare(true)}><Columns3 size={14} /> Compare{selectedCands.length ? ` (${selectedCands.length})` : ""}</button>
+        <button className="btn btn-ghost sm" onClick={() => window.print()} aria-label="Print"><Printer size={14} /></button>
+        <button className="btn btn-ghost sm" onClick={doExport} disabled={exporting}><Download size={14} /> {exporting ? "Exporting…" : "Export"}</button>
       </div>
 
       <div className="bulkbar">
-        <span className="muted">{selectedCands.length ? `${selectedCands.length} selected` : "Bulk actions"}</span>
+        <span>{selectedCands.length ? `${selectedCands.length} selected` : "Bulk actions"}</span>
         <button className="link-btn" onClick={() => setSelected(new Set(rows.map(candidateKey)))}>Select all filtered</button>
         {selectedCands.length > 0 && (<>
           <button className="btn btn-ghost sm" onClick={() => bulkStatus(selectedCands, "shortlisted")}>Shortlist selected</button>
           <button className="btn btn-ghost sm danger" onClick={() => bulkStatus(selectedCands, "rejected")}>Reject selected</button>
-          <button className="link-btn" onClick={() => setSelected(new Set())}>Clear</button>
+          <button className="link-btn muted" onClick={() => setSelected(new Set())}>Clear</button>
         </>)}
-        <span className="bulk-sep" />
-        <label className="bulk-min">Shortlist everyone ≥ <input className="input topn-num sm" type="number" min={0} max={100} value={bulkMin} onChange={(e) => setBulkMin(Number(e.target.value))} aria-label="Minimum score" /></label>
+        <span className="grow" />
+        <span className="sep" />
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Shortlist everyone ≥ <input className="input num-input sm" type="number" min={0} max={100} value={bulkMin} onChange={(e) => setBulkMin(Number(e.target.value))} aria-label="Minimum score" /></label>
         <button className="btn btn-primary sm" onClick={() => bulkStatus(data.top.filter((c) => c.score >= bulkMin && statusOf(c) === "new"), "shortlisted")}>Apply</button>
       </div>
 
       {view === "table" && (
-        <div className="table-wrap">
-          <table className="tbl tbl-fixed">
-            <colgroup>
-              <col style={{ width: 36 }} /><col style={{ width: 48 }} /><col />
-              {!anon && <col style={{ width: "19%" }} />}{!anon && <col className="hide-md" style={{ width: 140 }} />}
-              <col style={{ width: 62 }} /><col style={{ width: 150 }} /><col style={{ width: 128 }} />
-            </colgroup>
-            <thead><tr><th></th><th>#</th><th>Candidate</th>{!anon && <th>Email</th>}{!anon && <th className="hide-md">Phone</th>}<th>Exp.</th><th>Score</th><th>Status</th></tr></thead>
-            <tbody>
-              {rows.length === 0 && <tr><td colSpan={8} className="tbl-empty">No candidates match these filters.</td></tr>}
-              {rows.map((c, idx) => {
-                const status = statusOf(c);
-                const pr = prior.get((c.email || "").toLowerCase()) ?? 0;
-                return (
-                  <tr key={candidateKey(c) + c.rank} className={`row ${c.rank <= 3 ? "row-top" : ""} ${idx === active ? "row-active" : ""} ${drawerIdx === idx ? "row-open" : ""} st-${status}`}
-                    onClick={() => { setActive(idx); setDrawerIdx(idx); }}>
-                    <td className="c-check" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(candidateKey(c))} onChange={() => toggleSelect(c)} aria-label={`Select ${displayName(c)}`} /></td>
-                    <td className="c-rank"><span className={`rank-badge ${c.rank <= 3 ? "r" + c.rank : ""}`}>{c.rank}</span></td>
-                    <td>
-                      <div className="c-name">
-                        {displayName(c)}
-                        {pr > 0 && <span className="badge-prior" title={`Appeared in ${pr} previous run(s)`}>re-applicant ×{pr}</span>}
-                        {c.duplicate_group && <span className="badge-dup" title="Looks like the same person as another candidate">dup?</span>}
-                        {(c.confidence ?? 1) < 0.6 && <span className="badge-warn" title="Low resume-structure confidence">check</span>}
-                      </div>
-                      {!anon && <div className="c-sub" title={c.brief?.headline || c.filename}>{c.brief?.headline || c.filename}</div>}
-                    </td>
-                    {!anon && <td className="c-mono" title={c.email}>{c.email || "—"}</td>}
-                    {!anon && <td className="c-mono hide-md" title={c.phone}>{c.phone || "—"}</td>}
-                    <td className="c-exp">{c.experience_years}y</td>
-                    <td className="c-score"><div className="score-cell"><span className={`score-num ${scoreClass(c.score)}`}>{c.score}</span><div className="score-bar"><div className={`score-fill ${scoreClass(c.score)}`} style={{ width: `${c.score}%` }} /></div></div></td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <select className={`status-select st-${status}`} value={status} onChange={(e) => setStatus(c, e.target.value as ReviewStatus)} aria-label={`Status for ${displayName(c)}`}>
-                        {STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
-                      </select>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="tbl-card">
+          <div className="tbl-grid tbl-head"><span /><span>#</span><span>Candidate</span><span>Match</span><span>Exp.</span><span>Requirements</span><span>Status</span><span /></div>
+          {rows.length === 0 && <div className="tbl-empty">No candidates match these filters.</div>}
+          {rows.map((c, idx) => {
+            const st = statusOf(c);
+            const sc = scoreClass(c.score);
+            const m = new Set(c.matched_skills);
+            return (
+              <div key={candidateKey(c) + c.rank} role="button" tabIndex={0}
+                className={`tbl-grid tbl-row st-${st} ${idx === active ? "active" : ""} ${drawerIdx === idx ? "open" : ""}`}
+                onClick={() => open(idx)} onKeyDown={(e) => e.key === "Enter" && open(idx)}>
+                <span className="check" onClick={(e) => e.stopPropagation()}><input type="checkbox" className="check" checked={selected.has(candidateKey(c))} onChange={() => toggleSelect(c)} aria-label={`Select ${displayName(c)}`} /></span>
+                <span><span className={`rank ${c.rank <= 3 ? "r" + c.rank : ""}`}>{c.rank}</span></span>
+                <span className="cand">
+                  <span className="cand-name">{displayName(c)}{tag(c)}</span>
+                  <span className="cand-head" title={anon ? undefined : c.brief?.headline || c.filename}>{anon ? "hidden in anonymized review" : c.brief?.headline || c.filename}</span>
+                </span>
+                <span className="score"><b className={`sc-${sc}`}>{c.score}</b><span className="score-bar"><span className={`bg-${sc}`} style={{ width: `${c.score}%` }} /></span></span>
+                <span className="exp">{c.experience_years} yrs</span>
+                <span className="dots">{units.map((u) => <span key={u.label} className={`dot ${u.members.some((s) => m.has(s)) ? "hit" : ""}`} title={`${u.label}: ${u.members.some((s) => m.has(s)) ? "matched" : "missing"}`} />)}</span>
+                <span onClick={(e) => e.stopPropagation()}>
+                  <StatusPicker value={st} onChange={(s) => setStatus(c, s)} label={`Status for ${displayName(c)}`} />
+                </span>
+                <span className="chev"><ChevronRight size={16} /></span>
+              </div>
+            );
+          })}
         </div>
       )}
 
       {view === "heatmap" && (
-        <div className="table-wrap heat-wrap">
-          <table className="heat">
-            <thead><tr><th className="heat-name">Candidate</th><th>Score</th>{units.map((u) => <th key={u.label} className="heat-col"><span>{u.label}</span></th>)}</tr></thead>
-            <tbody>
-              {rows.map((c, idx) => {
-                const m = new Set(c.matched_skills);
-                return (
-                  <tr key={c.rank} className="row" onClick={() => { setActive(idx); setDrawerIdx(idx); }}>
-                    <td className="heat-name"><span className={`rank-badge ${c.rank <= 3 ? "r" + c.rank : ""}`}>{c.rank}</span> {displayName(c)}</td>
-                    <td><span className={`score-num ${scoreClass(c.score)}`}>{c.score}</span></td>
-                    {units.map((u) => { const hit = u.members.some((s) => m.has(s)); return <td key={u.label} className={`heat-cell ${hit ? "hit" : "miss"}`} title={`${u.label}: ${hit ? "matched" : "missing"}`}>{hit ? "●" : ""}</td>; })}
-                  </tr>
-                );
-              })}
-              <tr className="heat-total"><td className="heat-name">Coverage</td><td></td>
-                {units.map((u) => { const n = rows.filter((c) => u.members.some((s) => c.matched_skills.includes(s))).length; const pct = rows.length ? Math.round((n / rows.length) * 100) : 0; return <td key={u.label} className={`heat-cell pct ${pct < 34 ? "rare" : ""}`} title={`${n}/${rows.length} candidates`}>{pct}%</td>; })}
-              </tr>
-            </tbody>
-          </table>
-          <p className="hint">Low-coverage columns are skills almost nobody has — consider whether they're truly must-haves. Click a row for details.</p>
+        <div className="heat fade-in">
+          <div className="heat-grid heat-head" style={{ gridTemplateColumns: `minmax(200px, 1.4fr) 70px repeat(${units.length}, minmax(58px, 1fr))` }}>
+            <span>Candidate</span><span style={{ textAlign: "center" }}>Score</span>
+            {units.map((u) => <span key={u.label} className="heat-vert" title={u.label}>{u.label}</span>)}
+          </div>
+          {rows.map((c, idx) => {
+            const m = new Set(c.matched_skills);
+            return (
+              <div key={c.rank} className="heat-grid heat-row" style={{ gridTemplateColumns: `minmax(200px, 1.4fr) 70px repeat(${units.length}, minmax(58px, 1fr))` }} onClick={() => open(idx)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && open(idx)}>
+                <span className="heat-name"><span className={`rank sm ${c.rank <= 3 ? "r" + c.rank : ""}`}>{c.rank}</span>{displayName(c)}</span>
+                <b className={`heat-score sc-${scoreClass(c.score)}`}>{c.score}</b>
+                {units.map((u) => { const hit = u.members.some((s) => m.has(s)); return <span key={u.label} className={`heat-cell ${hit ? "hit" : ""}`} title={`${u.label}: ${hit ? "matched" : "missing"}`} />; })}
+              </div>
+            );
+          })}
+          <div className="heat-grid heat-total" style={{ gridTemplateColumns: `minmax(200px, 1.4fr) 70px repeat(${units.length}, minmax(58px, 1fr))` }}>
+            <span>Coverage</span><span />
+            {units.map((u) => { const n = rows.filter((c) => u.members.some((s) => c.matched_skills.includes(s))).length; const pct = rows.length ? Math.round((n / rows.length) * 100) : 0; return <span key={u.label} className={pct < 34 ? "rare" : ""} title={`${n}/${rows.length} candidates`}>{pct}%</span>; })}
+          </div>
+          <p>Columns in red are requirements almost nobody meets — worth checking whether they are truly must-haves.</p>
         </div>
       )}
 
-      {view === "board" && <Board cands={rows} statusOf={statusOf} anon={anon} onMove={(c, s) => setStatus(c, s, true)} onOpen={(c) => { const i = rows.indexOf(c); setActive(i); setDrawerIdx(i); }} />}
+      {view === "board" && (<>
+        <Board cands={rows} statusOf={statusOf} anon={anon} onMove={(c, s) => setStatus(c, s, true)} onOpen={(c) => open(rows.indexOf(c))} />
+        <p>Drag a card between columns to change a candidate's status.</p>
+      </>)}
 
       {flagged.length > 0 && (
-        <div className="flagged"><h3>Excluded — didn't look like a resume</h3>
-          <ul>{flagged.map((f) => <li key={f.filename}><b>{f.filename}</b><span className="muted"> · confidence {Math.round(f.confidence * 100)}% · {f.reasons.join(", ")}</span></li>)}</ul></div>
+        <div className="notice-row">
+          <AlertTriangle size={15} />
+          <span><b>{flagged.length} file{flagged.length === 1 ? "" : "s"} excluded</b> — {flagged.slice(0, 3).map((f) => f.filename).join(", ")}{flagged.length > 3 ? ` and ${flagged.length - 3} more` : ""} didn't look like resumes.</span>
+          <span className="grow" />
+          <details style={{ fontSize: 12.5 }}><summary className="link-btn" style={{ cursor: "pointer", listStyle: "none" }}>Why?</summary>
+            <ul style={{ margin: "8px 0 0", paddingLeft: 16 }}>{flagged.map((f) => <li key={f.filename}><b>{f.filename}</b> · confidence {Math.round(f.confidence * 100)}% · {f.reasons.join(", ")}</li>)}</ul>
+          </details>
+        </div>
       )}
-      {data.errors.length > 0 && <div className="errors">{data.errors.map((e) => <div key={e.filename} className="err-line">{e.filename}: {e.error}</div>)}</div>}
+      {data.errors.length > 0 && <div className="notice-row" style={{ flexDirection: "column", alignItems: "flex-start", gap: 2 }}>{data.errors.map((e) => <div key={e.filename} className="err-line">{e.filename}: {e.error}</div>)}</div>}
 
       <AnimatePresence>
         {drawerCand && (
@@ -325,45 +293,52 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
         )}
       </AnimatePresence>
 
-      {createPortal(<AnimatePresence>
-        {compare && selectedCands.length >= 2 && (
-          <div className="modal-scrim" onClick={() => setCompare(false)}>
-            <motion.div className="modal compare" onClick={(e) => e.stopPropagation()} initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.98 }} role="dialog" aria-modal="true" aria-label="Compare candidates">
-              <div className="panel">
-                <div className="panel-head"><h2>Compare candidates</h2><button className="btn btn-ghost sm" onClick={() => setCompare(false)}>Close</button></div>
-                <div className="cmp-grid" style={{ gridTemplateColumns: `160px repeat(${selectedCands.length}, 1fr)` }}>
-                  <div className="cmp-h"></div>
-                  {selectedCands.map((c) => <div key={c.rank} className="cmp-h"><div className="c-name">{displayName(c)}</div><span className={`score-num ${scoreClass(c.score)}`}>{c.score}</span></div>)}
-                  <div className="cmp-l">Experience</div>{selectedCands.map((c) => <div key={c.rank}>{c.experience_years} yrs</div>)}
-                  {Object.keys(selectedCands[0].breakdown).map((k) => <CmpRow key={k} label={k} cands={selectedCands} k={k} />)}
-                  <div className="cmp-l">Matched</div>{selectedCands.map((c) => <div key={c.rank} className="tags">{c.matched_skills.map((s) => <span key={s} className="tag matched">{s}</span>)}</div>)}
-                  <div className="cmp-l">Missing</div>{selectedCands.map((c) => <div key={c.rank} className="tags">{c.missing_skills.map((s) => <span key={s} className="tag missing">{s}</span>)}</div>)}
-                  <div className="cmp-l">Brief</div>{selectedCands.map((c) => <div key={c.rank} className="muted small">{c.brief?.headline}</div>)}
-                </div>
-              </div>
-            </motion.div>
+      {compare && selectedCands.length >= 2 && createPortal(
+        <div className="modal-scrim" onClick={() => setCompare(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Compare candidates">
+            <div className="card-head"><h2>Compare candidates</h2><button className="btn btn-ghost sm" onClick={() => setCompare(false)}>Close</button></div>
+            <div className="cmp-grid" style={{ gridTemplateColumns: `140px repeat(${selectedCands.length}, minmax(160px, 1fr))` }}>
+              <div className="cmp-h" />
+              {selectedCands.map((c) => <div key={c.rank} className="cmp-h"><div className="cand-name">{displayName(c)}</div><b className={`sc-${scoreClass(c.score)}`} style={{ fontSize: 22, fontWeight: 800 }}>{c.score}</b></div>)}
+              <div className="cmp-l">Experience</div>{selectedCands.map((c) => <div key={c.rank}>{c.experience_years} yrs</div>)}
+              {Object.keys(selectedCands[0].breakdown).map((k) => (<CmpRow key={k} label={k} cands={selectedCands} k={k} />))}
+              <div className="cmp-l">Matched</div>{selectedCands.map((c) => <div key={c.rank} className="chips">{c.matched_skills.map((s) => <span key={s} className="chip matched">{s}</span>)}</div>)}
+              <div className="cmp-l">Missing</div>{selectedCands.map((c) => <div key={c.rank} className="chips">{c.missing_skills.map((s) => <span key={s} className="chip missing">{s}</span>)}</div>)}
+              <div className="cmp-l">Brief</div>{selectedCands.map((c) => <div key={c.rank} className="muted small">{c.brief?.headline}</div>)}
+            </div>
           </div>
-        )}
-      </AnimatePresence>, document.body)}
+        </div>, document.body)}
 
       {emailTo && createPortal(<EmailModal c={emailTo} jobTitle={data.job.title} onClose={() => setEmailTo(null)} onSent={() => setEmailTo(null)} />, document.body)}
 
       {viewFile && createPortal(
         <div className="modal-scrim" onClick={() => { URL.revokeObjectURL(viewFile.url); setViewFile(null); }}>
           <div className="modal viewer" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Resume preview">
-            <div className="viewer-head"><span>{viewFile.name}</span><button className="btn btn-ghost sm" onClick={() => { URL.revokeObjectURL(viewFile.url); setViewFile(null); }}>Close</button></div>
+            <div className="viewer-head"><span className="ellipsis">{viewFile.name}</span><button className="btn btn-ghost sm" onClick={() => { URL.revokeObjectURL(viewFile.url); setViewFile(null); }}>Close</button></div>
             {viewFile.name.toLowerCase().endsWith(".pdf") ? <iframe title="resume" src={viewFile.url} className="viewer-frame" /> : <p className="muted" style={{ padding: 20 }}>Inline preview is available for PDFs. <a href={viewFile.url} download={viewFile.name}>Download {viewFile.name}</a></p>}
           </div>
         </div>, document.body)}
-    </motion.section>
+    </section>
+  );
+}
+
+function StatusPicker({ value, onChange, label }: { value: ReviewStatus; onChange: (s: ReviewStatus) => void; label: string }) {
+  return (
+    <span style={{ position: "relative", display: "inline-flex" }}>
+      <Badge variant={statusVariant(value)}>{STATUS_LABEL[value]} ▾</Badge>
+      <select value={value} onChange={(e) => onChange(e.target.value as ReviewStatus)} aria-label={label}
+        style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%" }}>
+        {STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+      </select>
+    </span>
   );
 }
 
 function CmpRow({ label, cands, k }: { label: string; cands: Candidate[]; k: string }) {
   return (<>
-    <div className="cmp-l cap">{label}</div>
+    <div className="cmp-l">{label}</div>
     {cands.map((c) => { const v = c.breakdown[k]; return (
-      <div key={c.rank}><div className="bd-head"><span></span><span className="bd-val">{v?.score ?? 0}/{v?.max ?? 0}</span></div><div className="bd-track"><div className="bd-fill" style={{ width: `${v ? (v.score / v.max) * 100 : 0}%` }} /></div></div>
+      <div key={c.rank} className="bd"><div className="l"><span /><b>{v?.score ?? 0}/{v?.max ?? 0}</b></div><div className="track"><span style={{ width: `${v ? (v.score / v.max) * 100 : 0}%` }} /></div></div>
     ); })}
   </>);
 }
@@ -371,15 +346,15 @@ function CmpRow({ label, cands, k }: { label: string; cands: Candidate[]; k: str
 function Board({ cands, statusOf, anon, onMove, onOpen }: { cands: Candidate[]; statusOf: (c: Candidate) => ReviewStatus; anon: boolean; onMove: (c: Candidate, s: ReviewStatus) => void; onOpen: (c: Candidate) => void }) {
   const [drag, setDrag] = useState<Candidate | null>(null);
   return (
-    <div className="board">
+    <div className="board fade-in">
       {STATUSES.map((s) => (
-        <div key={s} className={`col st-${s}`} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (drag) onMove(drag, s); setDrag(null); }}>
-          <div className="col-head">{STATUS_LABEL[s]} <span>{cands.filter((c) => statusOf(c) === s).length}</span></div>
+        <div key={s} className="board-col" onDragOver={(e) => e.preventDefault()} onDrop={() => { if (drag) onMove(drag, s); setDrag(null); }}>
+          <div className={`board-col-head st-${s}-c`}><span>{STATUS_LABEL[s]}</span><b>{cands.filter((c) => statusOf(c) === s).length}</b></div>
           {cands.filter((c) => statusOf(c) === s).map((c) => (
-            <div key={c.rank} className="card-mini" draggable onDragStart={() => setDrag(c)} onClick={() => onOpen(c)}>
-              <div className="cm-top"><span className={`rank-badge ${c.rank <= 3 ? "r" + c.rank : ""}`}>{c.rank}</span><span className={`score-num ${scoreClass(c.score)}`}>{c.score}</span></div>
-              <div className="c-name">{anon ? `Candidate #${c.rank}` : c.name}</div>
-              <div className="c-sub">{c.experience_years}y · {c.matched_skills.slice(0, 3).join(", ")}</div>
+            <div key={c.rank} className={`board-card acc-${s}`} draggable onDragStart={() => setDrag(c)} onClick={() => onOpen(c)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen(c)}>
+              <div className="top"><span className={`rank sm ${c.rank <= 3 ? "r" + c.rank : ""}`}>{c.rank}</span><b className={`sc-${scoreClass(c.score)}`}>{c.score}</b></div>
+              <div className="n">{anon ? `Candidate #${c.rank}` : c.name}</div>
+              <div className="m">{c.experience_years}y · {c.matched_skills.slice(0, 3).join(", ") || "no matched requirements"}</div>
             </div>
           ))}
         </div>
@@ -411,20 +386,16 @@ function EmailModal({ c, jobTitle, onClose, onSent }: { c: Candidate; jobTitle: 
   return (
     <div className="modal-scrim" onClick={onClose}>
       <div className="modal email" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Email candidate">
-        <div className="panel">
-          <div className="panel-head"><h2>Email {c.name}</h2><button className="btn btn-ghost sm" onClick={onClose}>Close</button></div>
-          <div className="segmented small" style={{ marginBottom: 14 }}>
-            <button className={tpl === "ack" ? "seg on" : "seg"} onClick={() => pick("ack")}>Acknowledge</button>
-            <button className={tpl === "interview" ? "seg on" : "seg"} onClick={() => pick("interview")}>Invite to interview</button>
-            <button className={tpl === "reject" ? "seg on" : "seg"} onClick={() => pick("reject")}>Decline</button>
-          </div>
-          <div className="field"><label className="field-label">To</label><input className="input" value={c.email} disabled /></div>
-          <div className="field"><label className="field-label">Subject</label><input className="input" value={subject} onChange={(e) => setSubject(e.target.value)} /></div>
-          <div className="field"><label className="field-label">Message</label><textarea className="input textarea" rows={9} value={body} onChange={(e) => setBody(e.target.value)} /></div>
-          <div className="head-actions" style={{ justifyContent: "flex-end" }}>
-            <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary" onClick={send} disabled={busy || !subject.trim() || !body.trim()}><Send size={14} /> {busy ? "Sending…" : "Send via Gmail"}</button>
-          </div>
+        <div className="card-head"><h2>Email {c.name}</h2><button className="btn btn-ghost sm" onClick={onClose}>Close</button></div>
+        <div style={{ marginBottom: 14 }}>
+          <SegTabs small value={tpl} onChange={pick} items={[{ value: "ack", label: "Acknowledge" }, { value: "interview", label: "Invite to interview" }, { value: "reject", label: "Decline" }]} />
+        </div>
+        <div className="field"><label className="field-label">To</label><input className="input" value={c.email} disabled /></div>
+        <div className="field"><label className="field-label">Subject</label><input className="input" value={subject} onChange={(e) => setSubject(e.target.value)} /></div>
+        <div className="field"><label className="field-label">Message</label><textarea className="input textarea" rows={9} value={body} onChange={(e) => setBody(e.target.value)} /></div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={send} disabled={busy || !subject.trim() || !body.trim()}><Send size={14} /> {busy ? "Sending…" : "Send via Gmail"}</button>
         </div>
       </div>
     </div>
