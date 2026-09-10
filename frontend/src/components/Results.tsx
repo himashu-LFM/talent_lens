@@ -5,8 +5,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence } from "framer-motion";
-import { AlertTriangle, ChevronRight, Columns3, Download, Grid3X3, KanbanSquare, Printer, Send, Table2 } from "lucide-react";
+import {
+  AlertTriangle, ChevronRight, Columns3, Download, Grid3X3, KanbanSquare, MessageSquare,
+  Printer, Scale, Send, Table2,
+} from "lucide-react";
 import CandidateDrawer from "./CandidateDrawer";
+import BiasPanel from "./BiasPanel";
 import { Badge, SegTabs, scoreClass, statusVariant } from "./ds";
 import type { Candidate, ExportCandidate, ScreenResponse } from "../api";
 import { gmailSend } from "../api";
@@ -14,7 +18,8 @@ import { useAuth } from "../auth/AuthProvider";
 import { useWorkspace, type View } from "../context/Workspace";
 import { useToast } from "./Toast";
 import {
-  STATUSES, bulkUpsertReviews, candidateKey, listReviews, priorAppearances, upsertReview,
+  STATUSES, bulkUpsertReviews, canReview as roleCanReview, candidateKey, commentCounts,
+  listReviews, logAudit, priorAppearances, runResumeMap, signedResumeUrl, upsertReview,
   type Review, type ReviewStatus,
 } from "../lib/db";
 
@@ -45,8 +50,9 @@ export function requirementUnits(data: ScreenResponse): { label: string; members
 export default function Results({ data, runId, files, canSend, onExport, exporting, onCounts }: Props) {
   const toast = useToast();
   const { user, configured } = useAuth();
-  const { filters, setFilters } = useWorkspace();
-  const { query, minScore, status: statusFilter, anon, view, sort: sortKey } = filters;
+  const { filters, setFilters, orgId, role } = useWorkspace();
+  const { query, minScore, status: statusFilter, anon, view, sort: sortKey, assignee } = filters;
+  const mayReview = roleCanReview(role) || !configured;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [compare, setCompare] = useState(false);
@@ -57,13 +63,20 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
   const [emailTo, setEmailTo] = useState<Candidate | null>(null);
   const [viewFile, setViewFile] = useState<{ url: string; name: string } | null>(null);
   const [bulkMin, setBulkMin] = useState(70);
+  const [comments, setComments] = useState<Map<string, number>>(new Map());
+  const [stored, setStored] = useState<Map<string, { path: string; filename: string }>>(new Map());
+  const [showBias, setShowBias] = useState(false);
 
-  const canPersist = configured && !!user && !!runId;
+  const canPersist = configured && !!user && !!runId && !!orgId;
   const fileMap = useMemo(() => new Map((files ?? []).map((f) => [f.name, f])), [files]);
 
   useEffect(() => {
     if (!configured || !user) return;
-    if (runId) listReviews(runId).then(setReviews).catch(() => {});
+    if (runId) {
+      listReviews(runId).then(setReviews).catch(() => {});
+      commentCounts(runId).then(setComments).catch(() => {});
+      runResumeMap(runId).then(setStored).catch(() => {});
+    }
     priorAppearances(data.ranked.map((c) => c.email), runId ?? undefined).then(setPrior).catch(() => {});
   }, [configured, user, runId, data]);
 
@@ -81,7 +94,7 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
     setLocal(c, { status });
     if (!canPersist) { if (!quiet) toast.info("Status set locally — enable history (Supabase) to save.", 3500); return; }
     try {
-      await upsertReview(user!.id, runId!, candidateKey(c), { status, name: c.name, email: c.email });
+      await upsertReview(orgId, user!.id, runId!, candidateKey(c), { status, name: c.name, email: c.email });
       if (!quiet) toast.success(`${displayName(c)} → ${STATUS_LABEL[status]}`, 2500);
     } catch (e) { toast.error(`Couldn't save status: ${msg(e)}`); }
   }
@@ -91,7 +104,7 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
     cands.forEach((c) => { const key = candidateKey(c); next.set(key, { ...(reviews.get(key) ?? emptyReview(runId ?? "", key, c)), status }); });
     setReviews(next);
     if (canPersist) {
-      try { await bulkUpsertReviews(user!.id, runId!, cands.map((c) => ({ key: candidateKey(c), status, name: c.name, email: c.email }))); }
+      try { await bulkUpsertReviews(orgId, user!.id, runId!, cands.map((c) => ({ key: candidateKey(c), status, name: c.name, email: c.email }))); }
       catch (e) { return toast.error(`Bulk save failed: ${msg(e)}`); }
     }
     toast.success(`${cands.length} candidate${cands.length === 1 ? "" : "s"} → ${STATUS_LABEL[status]}`);
@@ -100,8 +113,17 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
   async function saveNotes(c: Candidate, notes: string) {
     setLocal(c, { notes });
     if (!canPersist) return;
-    try { await upsertReview(user!.id, runId!, candidateKey(c), { notes, name: c.name, email: c.email }); toast.success("Notes saved.", 1800); }
+    try { await upsertReview(orgId, user!.id, runId!, candidateKey(c), { notes, name: c.name, email: c.email }); toast.success("Notes saved.", 1800); }
     catch (e) { toast.error(`Couldn't save notes: ${msg(e)}`); }
+  }
+
+  async function setAssignee(c: Candidate, userId: string | null) {
+    setLocal(c, { assignee_id: userId });
+    if (!canPersist) { toast.info("Owner set locally - enable history (Supabase) to save.", 3500); return; }
+    try {
+      await upsertReview(orgId, user!.id, runId!, candidateKey(c),
+                         { assignee_id: userId, name: c.name, email: c.email });
+    } catch (e) { toast.error(`Couldn't assign: ${msg(e)}`); }
   }
 
   const rows = useMemo(() => {
@@ -109,6 +131,11 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
     let list = data.top.filter((c) => {
       if (c.score < minScore) return false;
       if (statusFilter !== "all" && statusOf(c) !== statusFilter) return false;
+      if (assignee !== "all") {
+        const owner = reviewOf(c)?.assignee_id ?? null;
+        if (assignee === "mine" && owner !== user?.id) return false;
+        if (assignee === "unassigned" && owner) return false;
+      }
       if (!q) return true;
       return `${c.name} ${c.email} ${c.filename} ${c.matched_skills.join(" ")} ${c.skills.join(" ")}`.toLowerCase().includes(q);
     });
@@ -118,7 +145,7 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
       : a.name.localeCompare(b.name));
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, query, statusFilter, minScore, sortKey, reviews]);
+  }, [data, query, statusFilter, minScore, sortKey, reviews, assignee, user?.id]);
 
   const counts = useMemo(() => STATUSES.reduce((acc, s) => ({ ...acc, [s]: data.top.filter((c) => statusOf(c) === s).length }), {} as Record<ReviewStatus, number>),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -156,17 +183,38 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
     const key = candidateKey(c); const next = new Set(selected);
     next.has(key) ? next.delete(key) : next.add(key); setSelected(next);
   }
-  function doExport() { onExport(rows.map((c) => ({ ...c, status: statusOf(c), notes: reviewOf(c)?.notes ?? "" }))); }
-  function openResume(c: Candidate) {
+  function doExport() {
+    onExport(rows.map((c) => ({ ...c, status: statusOf(c), notes: reviewOf(c)?.notes ?? "" })));
+    if (orgId && user) {
+      logAudit(orgId, user.id, "export.excel", "screening_run", {
+        run_id: runId ?? null, after: { candidates: rows.length, job: data.job.title },
+      });
+    }
+  }
+  async function openResume(c: Candidate) {
     const f = fileMap.get(c.filename);
-    if (!f) return toast.info("Original file isn't available for this candidate (Gmail/history runs).", 4000);
-    setViewFile({ url: URL.createObjectURL(f), name: f.name });
+    if (f) { setViewFile({ url: URL.createObjectURL(f), name: f.name }); return; }
+    // A re-opened run no longer has the File in memory: stream the stored copy.
+    const ref = stored.get(candidateKey(c));
+    if (!ref) {
+      toast.info("No stored copy of this resume. Runs screened before storage was enabled have none.", 5000);
+      return;
+    }
+    const id = toast.loading("Fetching the stored resume...");
+    try {
+      const url = await signedResumeUrl(ref.path);
+      setViewFile({ url, name: ref.filename });
+      toast.dismiss(id);
+    } catch (e) {
+      toast.update(id, "error", `Couldn't open it: ${msg(e)}`, 6000);
+    }
   }
   function open(idx: number) { setActive(idx); setDrawerIdx(idx); }
 
   const units = useMemo(() => requirementUnits(data), [data]);
   const flagged = data.flagged ?? [];
   const drawerCand = drawerIdx !== null ? rows[drawerIdx] : null;
+  const bias = data.bias_audit;
   const tag = (c: Candidate) => {
     const pr = prior.get((c.email || "").toLowerCase()) ?? 0;
     if (pr > 0) return <span className="mini-tag" title={`Appeared in ${pr} previous run(s)`}>re-applicant ×{pr}</span>;
@@ -186,8 +234,25 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
         <select className="input" style={{ width: 150, height: 38, fontSize: 12.5 }} value={sortKey} onChange={(e) => setFilters({ sort: e.target.value as typeof sortKey })} aria-label="Sort">
           <option value="score">Sort: Score</option><option value="experience">Sort: Experience</option><option value="name">Sort: Name</option>
         </select>
+        {configured && (
+          <select className="input" style={{ width: 146, height: 38, fontSize: 12.5 }}
+            value={assignee} onChange={(e) => setFilters({ assignee: e.target.value as typeof assignee })}
+            aria-label="Filter by owner">
+            <option value="all">Any owner</option>
+            <option value="mine">Mine</option>
+            <option value="unassigned">Unassigned</option>
+          </select>
+        )}
         <div className="grow" />
-        <span className="kbd-hint"><kbd>j</kbd> <kbd>k</kbd> move · <kbd>↵</kbd> open · <kbd>s</kbd> shortlist · <kbd>r</kbd> reject</span>
+        {bias && (
+          <button className={`btn sm ${showBias ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setShowBias((v) => !v)} aria-pressed={showBias}
+            title={bias.anonymisation.clean ? "Fairness audit: name-blind" : "Fairness audit: review needed"}>
+            <Scale size={14} /> Fairness
+            {!bias.anonymisation.clean && <span className="mini-tag warn">check</span>}
+          </button>
+        )}
+        <span className="kbd-hint"><kbd>j</kbd> <kbd>k</kbd> move · <kbd>↵</kbd> open · <kbd>s</kbd> shortlist</span>
         <button className="btn btn-ghost sm" disabled={selectedCands.length < 2 || selectedCands.length > 3} onClick={() => setCompare(true)}><Columns3 size={14} /> Compare{selectedCands.length ? ` (${selectedCands.length})` : ""}</button>
         <button className="btn btn-ghost sm" onClick={() => window.print()} aria-label="Print"><Printer size={14} /></button>
         <button className="btn btn-ghost sm" onClick={doExport} disabled={exporting}><Download size={14} /> {exporting ? "Exporting…" : "Export"}</button>
@@ -207,6 +272,10 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
         <button className="btn btn-primary sm" onClick={() => bulkStatus(data.top.filter((c) => c.score >= bulkMin && statusOf(c) === "new"), "shortlisted")}>Apply</button>
       </div>
 
+      {showBias && bias && (
+        <div style={{ marginBottom: 20 }}><BiasPanel report={bias} /></div>
+      )}
+
       {view === "table" && (
         <div className="tbl-card">
           <div className="tbl-grid tbl-head"><span /><span>#</span><span>Candidate</span><span>Match</span><span>Exp.</span><span>Requirements</span><span>Status</span><span /></div>
@@ -222,7 +291,14 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
                 <span className="check" onClick={(e) => e.stopPropagation()}><input type="checkbox" className="check" checked={selected.has(candidateKey(c))} onChange={() => toggleSelect(c)} aria-label={`Select ${displayName(c)}`} /></span>
                 <span><span className={`rank ${c.rank <= 3 ? "r" + c.rank : ""}`}>{c.rank}</span></span>
                 <span className="cand">
-                  <span className="cand-name">{displayName(c)}{tag(c)}</span>
+                  <span className="cand-name">
+                    {displayName(c)}{tag(c)}
+                    {(comments.get(candidateKey(c)) ?? 0) > 0 && (
+                      <span className="mini-tag" title="Team discussion">
+                        <MessageSquare size={9} style={{ verticalAlign: -1 }} /> {comments.get(candidateKey(c))}
+                      </span>
+                    )}
+                  </span>
                   <span className="cand-head" title={anon ? undefined : c.brief?.headline || c.filename}>{anon ? "hidden in anonymized review" : c.brief?.headline || c.filename}</span>
                 </span>
                 <span className="score"><b className={`sc-${sc}`}>{c.score}</b><span className="score-bar"><span className={`bg-${sc}`} style={{ width: `${c.score}%` }} /></span></span>
@@ -284,7 +360,10 @@ export default function Results({ data, runId, files, canSend, onExport, exporti
           <CandidateDrawer key={candidateKey(drawerCand) + drawerCand.rank}
             c={drawerCand} index={drawerIdx!} total={rows.length} anon={anon} review={reviewOf(drawerCand)}
             prior={prior.get((drawerCand.email || "").toLowerCase()) ?? 0}
-            canEmail={!!canSend && !!drawerCand.email} canView={fileMap.has(drawerCand.filename)}
+            canEmail={!!canSend && !!drawerCand.email}
+            canView={fileMap.has(drawerCand.filename) || stored.has(candidateKey(drawerCand))}
+            runId={runId ?? null} canReview={mayReview}
+            onAssign={(uid) => setAssignee(drawerCand, uid)}
             onClose={() => setDrawerIdx(null)}
             onPrev={() => setDrawerIdx((i) => (i !== null && i > 0 ? i - 1 : i))}
             onNext={() => setDrawerIdx((i) => (i !== null && i < rows.length - 1 ? i + 1 : i))}
@@ -403,6 +482,9 @@ function EmailModal({ c, jobTitle, onClose, onSent }: { c: Candidate; jobTitle: 
 }
 
 function emptyReview(runId: string, key: string, c: Candidate): Review {
-  return { run_id: runId, candidate_key: key, candidate_name: c.name, candidate_email: c.email, status: "new", notes: "" };
+  return {
+    run_id: runId, candidate_key: key, candidate_name: c.name,
+    candidate_email: c.email, status: "new", notes: "", assignee_id: null,
+  };
 }
 function msg(e: unknown) { return e instanceof Error ? e.message : "unknown error"; }

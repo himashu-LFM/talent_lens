@@ -21,7 +21,7 @@ export default function TalentPool() {
   const { configured } = useAuth();
   const toast = useToast();
   const nav = useNavigate();
-  const { setRun, resetFilters } = useWorkspace();
+  const { setRun, resetFilters, orgId } = useWorkspace();
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,7 +32,7 @@ export default function TalentPool() {
 
   useEffect(() => {
     if (!configured) { setLoading(false); return; }
-    Promise.all([listRuns(), listAllReviews()])
+    Promise.all([listRuns(orgId || undefined), listAllReviews(orgId || undefined)])
       .then(([r, rv]) => { setRuns(r); setReviews(rv); })
       .catch((e) => toast.error(`Couldn't load talent pool: ${e.message}`))
       .finally(() => setLoading(false));
@@ -78,7 +78,10 @@ export default function TalentPool() {
     const r = runs.find((x) => x.id === id);
     if (!r) return;
     resetFilters();
-    setRun({ data: r.results, runId: r.id, files: [], title: r.title, source: "history", at: r.created_at });
+    setRun({
+      data: r.results, runId: r.id, files: [], title: r.title,
+      source: "history", jobId: r.job_id ?? null, at: r.created_at,
+    });
     nav("/shortlist");
   }
 

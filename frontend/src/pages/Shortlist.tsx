@@ -1,6 +1,6 @@
 /* Shortlist — the results workspace for the active run. Filters live in the
    context sidebar; the table / heatmap / pipeline views are in <Results>. */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Download, ListOrdered, Search } from "lucide-react";
 import Results, { requirementUnits } from "../components/Results";
@@ -10,7 +10,7 @@ import { useToast } from "../components/Toast";
 import { Sidebar, useWorkspace } from "../context/Workspace";
 import { useAuth } from "../auth/AuthProvider";
 import { exportExcel, type ExportCandidate } from "../api";
-import { STATUSES, type ReviewStatus } from "../lib/db";
+import { STATUSES, saveBiasAudit, type ReviewStatus } from "../lib/db";
 
 const STATUS_LABEL: Record<ReviewStatus, string> = { new: "New", shortlisted: "Shortlisted", interview: "Interview", rejected: "Rejected", hired: "Hired" };
 const DOT: Record<ReviewStatus, string> = { new: "var(--faint)", shortlisted: "var(--amber-400)", interview: "var(--blue-400)", rejected: "var(--red-400)", hired: "var(--emerald-400)" };
@@ -18,18 +18,33 @@ const DOT: Record<ReviewStatus, string> = { new: "var(--faint)", shortlisted: "v
 export default function Shortlist() {
   const nav = useNavigate();
   const toast = useToast();
-  const { run, filters, setFilters, ready } = useWorkspace();
+  const { run, filters, setFilters, ready, orgId } = useWorkspace();
   const { configured, user } = useAuth();
   const [exporting, setExporting] = useState(false);
   const [counts, setCounts] = useState<Record<ReviewStatus, number>>({ new: 0, shortlisted: 0, interview: 0, rejected: 0, hired: 0 });
 
   const units = useMemo(() => (run ? requirementUnits(run.data) : []), [run]);
 
+  // Keep the fairness report with the run, so the record of what was checked
+  // survives past this browser session.
+  const savedAudit = useRef<string | null>(null);
+  useEffect(() => {
+    const report = run?.data.bias_audit;
+    if (!report || !run?.runId || !orgId || !user || !configured) return;
+    if (savedAudit.current === run.runId) return;
+    savedAudit.current = run.runId;
+    saveBiasAudit(orgId, user.id, run.runId, report as unknown as Record<string, unknown>)
+      .catch(() => { savedAudit.current = null; });
+  }, [run?.runId, run?.data.bias_audit, orgId, user, configured]);
+
   async function doExport(rows: ExportCandidate[]) {
     if (!run) return;
     setExporting(true);
     const id = toast.loading("Building Excel file…");
-    try { await exportExcel(rows, run.data.job.title || run.title); toast.update(id, "success", `Exported ${rows.length} candidate(s).`); }
+    try {
+      await exportExcel(rows, run.data.job.title || run.title);
+      toast.update(id, "success", `Exported ${rows.length} candidate(s).`);
+    }
     catch (e) { toast.update(id, "error", `Export failed: ${e instanceof Error ? e.message : ""}`, 6000); }
     finally { setExporting(false); }
   }

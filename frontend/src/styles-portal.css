@@ -1,0 +1,138 @@
+/* =====================================================================
+   Team-portal layer: org switcher, comments, career timeline, jobs,
+   applications, interviews, audit log, fairness panel, tabs, and the
+   public candidate pages (apply form, status page, invite).
+
+   Loaded from styles.css so the token definitions there come first.
+   ===================================================================== */
+
+/* ---------- org switcher ---------- */
+.ctx-org { position: relative; padding: 12px 14px 0; }
+.org-btn { display: flex; align-items: center; gap: 8px; width: 100%; background: var(--surface-1); border: 1px solid var(--line); border-radius: 12px; padding: 9px 11px; color: var(--text); font-size: 13px; font-weight: 600; transition: border-color var(--t); text-align: left; }
+.org-btn:hover:not(:disabled) { border-color: var(--accent); }
+.org-btn:disabled { opacity: .6; cursor: default; }
+.org-btn > svg:first-child { color: var(--accent-text); flex: none; }
+.org-btn .ellipsis { flex: 1; min-width: 0; }
+.org-caret { color: var(--faint); flex: none; }
+.org-menu { position: absolute; z-index: 40; top: calc(100% + 6px); left: 14px; right: 14px; background: var(--surface-1); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow-xl); padding: 6px; animation: tl-pop .16s var(--ease) both; }
+.org-menu-head { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--ghost); font-weight: 800; padding: 8px 10px 4px; }
+.org-item { display: flex; align-items: center; gap: 8px; width: 100%; background: transparent; border: none; color: var(--text-2); padding: 9px 10px; border-radius: 9px; font-size: 13px; text-align: left; }
+.org-item:hover { background: var(--hover); color: var(--text); }
+.org-item.on { color: var(--accent-text); }
+.org-item.new { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 11px; color: var(--accent-text); font-weight: 600; }
+.org-item .org-role { font-size: 10.5px; color: var(--ghost); text-transform: uppercase; letter-spacing: .06em; flex: none; }
+.org-item .ellipsis { flex: 1; min-width: 0; }
+.org-empty { padding: 10px; font-size: 12.5px; color: var(--faint); }
+
+/* ---------- comments ---------- */
+.thread { display: flex; flex-direction: column; gap: 12px; }
+.cmt { display: flex; gap: 10px; }
+.cmt-body { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.cmt-head { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 5px; }
+.cmt-head b { font-size: 12.5px; }
+.cmt-head time { color: var(--ghost); }
+.cmt-head .link-btn { margin-left: auto; font-size: 11.5px; }
+.cmt-text { font-size: 13.5px; line-height: 1.6; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmt-compose { display: flex; gap: 10px; align-items: flex-start; }
+.cmt-compose .input { flex: 1; }
+
+/* ---------- career timeline ---------- */
+.timeline { display: flex; flex-direction: column; }
+.tl-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--row-line); }
+.tl-row:last-child { border-bottom: none; }
+.tl-when { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.tl-what { min-width: 0; }
+.tl-what b { font-size: 13.5px; display: block; }
+.tl-what > span { font-size: 12px; color: var(--muted); }
+.tl-dur { font-size: 11px; color: var(--ghost); }
+.tl-gap { display: flex; align-items: center; gap: 8px; padding: 7px 0 7px 116px; font-size: 12px; color: var(--amber-400); border-bottom: 1px solid var(--row-line); }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; }
+.fact { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; min-width: 84px; }
+.fact b { display: block; font-size: 14px; font-variant-numeric: tabular-nums; }
+.fact span { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+
+/* ---------- LLM assessment ---------- */
+.ai-verdict { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; padding: 5px 12px; border-radius: 100px; }
+.ai-strong_yes { background: rgba(16,185,129,.16); color: var(--success); }
+.ai-yes { background: rgba(52,211,153,.13); color: var(--success); }
+.ai-maybe { background: rgba(245,158,11,.15); color: var(--accent-text); }
+.ai-no { background: rgba(239,68,68,.14); color: var(--danger); }
+
+/* ---------- fairness audit ---------- */
+.bias-verdict { display: flex; gap: 12px; align-items: flex-start; border-radius: 14px; padding: 14px 16px; border: 1px solid var(--line); background: var(--bg); }
+.bias-verdict.clean { border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.06); }
+.bias-verdict.dirty { border-color: rgba(245,158,11,.4); background: rgba(245,158,11,.06); }
+.bias-verdict > svg { flex: none; margin-top: 2px; }
+.bias-verdict.clean > svg { color: var(--success); }
+.bias-verdict.dirty > svg { color: var(--accent-text); }
+.bias-verdict p { font-size: 13px; line-height: 1.6; }
+.bias-verdict .rec { margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+.spread-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+
+/* ---------- jobs, applications, interviews ---------- */
+.job-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--row-line); }
+.job-row:last-child { border-bottom: none; }
+.job-main { min-width: 0; }
+.job-main b { font-size: 14.5px; }
+.job-meta { font-size: 12px; color: var(--faint); margin-top: 3px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.job-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.link-box { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font-size: 12px; max-width: 100%; }
+.link-box code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent-text); }
+.slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.slot { display: flex; align-items: center; gap: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+.slot.taken { border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.06); }
+.slot-when { flex: 1; min-width: 0; }
+.slot-when b { display: block; font-size: 13px; }
+.slot-when span { font-size: 11.5px; color: var(--faint); }
+
+/* ---------- audit log ---------- */
+.audit { display: flex; flex-direction: column; }
+.audit-row { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--row-line); font-size: 13px; align-items: baseline; }
+.audit-row:last-child { border-bottom: none; }
+.audit-when { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.audit-what b { font-weight: 600; }
+.audit-what span { color: var(--muted); }
+
+/* ---------- tabs ---------- */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; overflow-x: auto; }
+.tab { background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13.5px; font-weight: 600; padding: 10px 14px; white-space: nowrap; transition: color var(--t), border-color var(--t); }
+.tab:hover { color: var(--text); }
+.tab.on { color: var(--accent-text); border-bottom-color: var(--accent); }
+
+/* =====================================================================
+   Public candidate pages
+   ===================================================================== */
+.pub { min-height: 100vh; background: var(--bg); }
+.pub-head { border-bottom: 1px solid var(--line); background: var(--glass); backdrop-filter: blur(16px); position: sticky; top: 0; z-index: 10; }
+.pub-head-in { max-width: 760px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 11px; }
+.pub-head-in b { font-size: 15px; }
+.pub-head-in .right { font-size: 12.5px; color: var(--faint); margin-left: auto; }
+.pub-wrap { max-width: 760px; margin: 0 auto; padding: 32px 24px 72px; }
+.pub-title { font-size: clamp(24px, 4vw, 32px); font-weight: 800; letter-spacing: -.03em; margin-bottom: 8px; }
+.pub-sub { color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 24px; }
+.pub-jd { background: var(--surface-1); border: 1px solid var(--line); border-radius: 16px; padding: 20px; font-size: 13.5px; line-height: 1.7; color: var(--text-2); white-space: pre-wrap; max-height: 320px; overflow-y: auto; margin-bottom: 8px; }
+.pub-section { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin: 28px 0 14px; }
+.pub-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.pub-consent { display: flex; gap: 12px; align-items: flex-start; background: var(--surface-1); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; font-size: 12.5px; line-height: 1.6; color: var(--text-2); }
+.pub-note { font-size: 12px; color: var(--faint); line-height: 1.6; margin-top: 8px; }
+.pub-done { text-align: center; padding: 56px 20px; }
+.pub-done .tick { width: 64px; height: 64px; margin: 0 auto 20px; border-radius: 50%; display: grid; place-items: center; background: rgba(16,185,129,.15); color: var(--success); }
+
+.stage-track { display: flex; margin: 24px 0 28px; }
+.stage-step { flex: 1; text-align: center; position: relative; padding-top: 26px; font-size: 12px; color: var(--faint); }
+.stage-step::before { content: ""; position: absolute; top: 7px; left: 0; right: 0; height: 3px; background: var(--surface-2); }
+.stage-step:first-child::before { border-radius: 3px 0 0 3px; }
+.stage-step:last-child::before { border-radius: 0 3px 3px 0; }
+.stage-step.done::before, .stage-step.on::before { background: var(--accent); }
+.stage-step.closed::before { background: var(--red-500); }
+.stage-step.on { color: var(--accent-text); font-weight: 700; }
+.stage-step i { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); width: 13px; height: 13px; border-radius: 50%; background: var(--surface-2); border: 2px solid var(--bg); }
+.stage-step.done i, .stage-step.on i { background: var(--accent); }
+.stage-step.closed i { background: var(--red-500); }
+
+@media (max-width: 640px) {
+  .pub-grid { grid-template-columns: 1fr; }
+  .tl-row { grid-template-columns: 84px minmax(0, 1fr); }
+  .tl-gap { padding-left: 96px; }
+  .audit-row { grid-template-columns: 1fr; gap: 2px; }
+}

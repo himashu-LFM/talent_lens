@@ -2,7 +2,10 @@
    card and add-resumes card; scoring weights live in the context sidebar. */
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BellRing, Bookmark, BookmarkCheck, FileSearch, ListOrdered, Mail, Play, Radar, Save, ScanLine, Sparkles, Target, Trash2, TrendingUp, Upload, Wand2 } from "lucide-react";
+import {
+  BellRing, Bookmark, BookmarkCheck, Bot, FileSearch, ListOrdered, Mail, Play, Radar,
+  Save, ScanLine, Scale, Sparkles, Target, Trash2, TrendingUp, Upload, Wand2,
+} from "lucide-react";
 import UploadZone from "../components/UploadZone";
 import GmailPanel from "../components/GmailPanel";
 import { useToast } from "../components/Toast";
@@ -10,7 +13,10 @@ import { ScreeningOverlay } from "../components/ui";
 import { Eyebrow, ProgressBar, SegTabs, StatCard } from "../components/ds";
 import { Sidebar, useWorkspace } from "../context/Workspace";
 import { useAuth } from "../auth/AuthProvider";
-import { deleteJob, listAllReviews, listJobs, listRuns, saveJob, saveRun, suggestWeights, type JobRow } from "../lib/db";
+import {
+  canWrite, deleteJob, listAllReviews, listJobs, listRuns, saveJob, saveRun,
+  suggestWeights, uploadResumes, type JobRow,
+} from "../lib/db";
 import {
   ackAutoResult, addWatch, analyzeJD, gmailScreen, listAutoResults, screen,
   type AutoResult, type JDAnalysis, type ScreenResponse, type Weights,
@@ -26,7 +32,8 @@ export default function Dashboard() {
   const toast = useToast();
   const nav = useNavigate();
   const { user, configured } = useAuth();
-  const { run, setRun, setDraftTitle, ready, refreshReady, resetFilters } = useWorkspace();
+  const { run, setRun, setDraftTitle, ready, refreshReady, resetFilters, orgId, role } = useWorkspace();
+  const mayWrite = canWrite(role) || !configured;
 
   const [title, setTitle] = useState(run?.source !== "history" ? run?.title ?? "" : "");
   const [description, setDescription] = useState("");
@@ -51,6 +58,8 @@ export default function Dashboard() {
   const [analyzing, setAnalyzing] = useState(false);
   const [autoResults, setAutoResults] = useState<AutoResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [audit, setAudit] = useState(true);
+  const [deep, setDeep] = useState(false);
 
   const hasJD = description.trim().length > 0;
 
@@ -72,17 +81,40 @@ export default function Dashboard() {
   // ---- run lifecycle ----
   async function finish(res: ScreenResponse, src: "upload" | "gmail" | "auto", srcFiles: File[]) {
     resetFilters();
-    setRun({ data: res, runId: null, files: srcFiles, title: title || res.job.title, source: src, at: new Date().toISOString() });
+    setRun({
+      data: res, runId: null, files: srcFiles, title: title || res.job.title,
+      source: src, jobId: jobId || null, at: new Date().toISOString(),
+    });
     const fl = res.flagged?.length ?? 0;
     if (fl) toast.info(`${fl} file${fl === 1 ? "" : "s"} excluded — didn't look like a resume.`, 6000);
     if (res.errors.length) toast.error(`${res.errors.length} file(s) couldn't be read.`, 6000);
+    if (res.llm && !res.llm.ran && deep) {
+      toast.info(`AI second opinion skipped: ${res.llm.reason ?? "not configured"}.`, 6000);
+    }
     nav("/shortlist");
-    if (configured && user && res.top.length > 0) {
-      try {
-        const id = await saveRun(user.id, title || res.job.title, src, res, jobId || null);
-        setRun((r) => (r && r.data === res ? { ...r, runId: id } : r));
-        toast.info("Saved to history.");
-      } catch (e) { toast.error(`History save failed: ${msg(e)}`, 6000); }
+
+    if (!(configured && user && orgId && res.top.length > 0)) return;
+    let runIdSaved: string | null = null;
+    try {
+      runIdSaved = await saveRun(orgId, user.id, title || res.job.title, src, res, jobId || null);
+      setRun((r) => (r && r.data === res ? { ...r, runId: runIdSaved } : r));
+      toast.info("Saved to history.");
+    } catch (e) {
+      toast.error(`History save failed: ${msg(e)}`, 6000);
+      return;
+    }
+
+    // Keep the original documents so a re-opened run can still show the PDF.
+    if (runIdSaved && srcFiles.length) {
+      const byName = new Map(srcFiles.map((f) => [f.name, f]));
+      const items = res.ranked
+        .map((c) => ({ key: (c.email || c.filename || "").toLowerCase(), file: byName.get(c.filename) }))
+        .filter((x): x is { key: string; file: File } => !!x.file && !!x.key);
+      if (items.length) {
+        const { stored, failed } = await uploadResumes(orgId, user.id, runIdSaved, items);
+        if (stored) toast.info(`Stored ${stored} resume${stored === 1 ? "" : "s"} for later review.`, 4000);
+        if (failed) toast.error(`${failed} resume${failed === 1 ? "" : "s"} couldn't be stored.`, 5000);
+      }
     }
   }
 
@@ -92,7 +124,8 @@ export default function Dashboard() {
     setLoading(true);
     const id = toast.loading(`Screening ${files.length} resume(s)…`);
     try {
-      const res = await screen(title, description, topN, files, weights);
+      const res = await screen(title, description, topN, files,
+                               { weights, audit, deep, deepTopN: topN });
       toast.update(id, "success", `Ranked ${res.ranked.length} — showing top ${res.top.length}.`);
       await finish(res, "upload", files);
     } catch (e) { toast.update(id, "error", `Screening failed: ${msg(e)}`, 7000); }
@@ -105,7 +138,11 @@ export default function Dashboard() {
     setLoading(true);
     const id = toast.loading("Fetching resumes from Gmail…");
     try {
-      const res = await gmailScreen({ title, description, top_n: topN, label_id: labelId, unread_only: unreadOnly, mark_read: markRead, weights });
+      const res = await gmailScreen({
+        title, description, top_n: topN, label_id: labelId,
+        unread_only: unreadOnly, mark_read: markRead, weights,
+        audit, deep, deep_top_n: topN,
+      });
       if ((res.fetched ?? 0) === 0) {
         toast.update(id, "info", unreadOnly ? "No unread emails with resume attachments in that label." : "No resume attachments found in that label.", 6000);
         return;
@@ -129,12 +166,15 @@ export default function Dashboard() {
 
   async function reviewAuto(r: AutoResult) {
     resetFilters();
-    setRun({ data: r.result, runId: null, files: [], title: r.result.job.title || r.title, source: "auto", at: r.created_at });
+    setRun({
+      data: r.result, runId: null, files: [], title: r.result.job.title || r.title,
+      source: "auto", jobId: null, at: r.created_at,
+    });
     toast.info(`Loaded auto-screened batch from “${r.label_name}”.`);
     nav("/shortlist");
-    if (configured && user) {
+    if (configured && user && orgId) {
       try {
-        const id = await saveRun(user.id, r.result.job.title || r.title, "auto", r.result, null);
+        const id = await saveRun(orgId, user.id, r.result.job.title || r.title, "auto", r.result, null);
         await ackAutoResult(r.id);
         setAutoResults((xs) => xs.filter((x) => x.id !== r.id));
         setRun((cur) => (cur && cur.data === r.result ? { ...cur, runId: id } : cur));
@@ -154,10 +194,11 @@ export default function Dashboard() {
     try { setJd(await analyzeJD(title, description)); } catch (e) { toast.error(`Analysis failed: ${msg(e)}`); } finally { setAnalyzing(false); }
   }
   async function doSaveJob() {
-    if (!(configured && user)) return toast.error("Sign in with history enabled to save jobs.");
+    if (!(configured && user && orgId)) return toast.error("Sign in with history enabled to save jobs.");
+    if (!mayWrite) return toast.error("Your role is read-only for jobs.");
     if (!hasJD) return toast.error("Add a job description first.");
     try {
-      const row = await saveJob(user.id, { id: jobId || undefined, title, description, top_n: topN, weights });
+      const row = await saveJob(orgId, user.id, { id: jobId || undefined, title, description, top_n: topN, weights });
       setJobs((js) => [row, ...js.filter((j) => j.id !== row.id)]);
       setJobId(row.id);
       toast.success(`Job “${row.title}” saved.`);
@@ -217,6 +258,28 @@ export default function Dashboard() {
             <div className="l"><span>Top candidates to keep</span><b>{topN}</b></div>
             <input type="range" className="range" min={1} max={50} value={Math.min(topN, 50)} onChange={(e) => setTopN(Number(e.target.value))} aria-label="Shortlist size" />
           </div>
+        </div>
+
+        <div>
+          <Eyebrow>Before you decide</Eyebrow>
+          <label className="ctx-check" style={{ marginBottom: 10 }}>
+            <input type="checkbox" className="check" checked={audit} onChange={(e) => setAudit(e.target.checked)} />
+            <span><Scale size={13} style={{ verticalAlign: -2 }} /> Fairness audit</span>
+          </label>
+          <p className="hint" style={{ marginTop: 0, marginBottom: 12 }}>
+            Re-scores everyone under substituted names to prove the ranking does not read identity.
+          </p>
+          <label className="ctx-check" style={{ opacity: ready?.llm?.available ? 1 : 0.55 }}>
+            <input type="checkbox" className="check" checked={deep}
+              disabled={!ready?.llm?.available}
+              onChange={(e) => setDeep(e.target.checked)} />
+            <span><Bot size={13} style={{ verticalAlign: -2 }} /> AI second opinion</span>
+          </label>
+          <p className="hint" style={{ marginTop: 6 }}>
+            {ready?.llm?.available
+              ? `Assesses your top ${Math.min(topN, ready.llm.max_candidates)} with ${ready.llm.model}. Costs API credits.`
+              : "Needs an Anthropic API key on the server."}
+          </p>
         </div>
         {!configured && (
           <div className="notice"><b>History off.</b> Add Supabase keys to <code>frontend/.env</code> to save runs, jobs, statuses and notes.</div>

@@ -5,11 +5,13 @@ title + description, add resumes (upload or straight from a **Gmail label**), an
 transparent, evidence-backed ranked shortlist you can review, compare, annotate, email
 and export. No LLM API key required.
 
-- **Frontend:** React + Vite + TypeScript · Supabase auth · history · talent pool · analytics
+- **Frontend:** React + Vite + TypeScript · Supabase auth · team workspaces · public
+  apply links · candidate status pages · history · talent pool · analytics
 - **Backend:** Python + FastAPI · hybrid scoring engine (on-device embeddings + BM25 +
-  skill taxonomy + must-have gating + date-based experience) · Gmail integration ·
-  auto-screen watcher
-- **Data:** Supabase (Postgres + row-level security) for runs, jobs, statuses and notes
+  skill taxonomy + must-have gating + date-based experience) · OCR for scanned resumes ·
+  Gmail integration · auto-screen watcher · email queue · retention sweeper
+- **Data:** Supabase (Postgres + row-level security + private Storage) for teams, runs,
+  jobs, applications, interviews, comments and an append-only audit log
 
 ---
 
@@ -26,14 +28,60 @@ and export. No LLM API key required.
   must-haves with point values) · **3-line candidate brief** · **interview question generator**
 - **"Not a resume" detection** — letters, forms and junk are flagged, not ranked
 - **Near-duplicate detection** (same person, different files) · exact-duplicate skipping
-- **PDF repair** for glued words · corrupt/scanned-file handling
+- **PDF repair** for glued words · corrupt-file handling
+- **OCR fallback** for scanned and photographed resumes — these used to be rejected with
+  "no extractable text", silently losing the candidate. Runs locally with no system
+  binaries and no network
+- **Structured career profile** — employer, title and tenure per role, merged totals,
+  employment gaps, job-hopping and seniority signals, education level
+- **Optional LLM second opinion** on the shortlist only (Sonnet 5 by default, with the
+  job description in a cached prompt prefix). Off unless a server key is set
+- **Best-fit across roles** — score one resume against every open job at once
 - **JD quality analyzer** — grades your job description and flags vagueness, missing
   must-haves, unrealistic requirement counts and biased wording *before* you screen
 - **Per-job scoring weights**, plus **"learns from your decisions"** — suggests weights
   from your own shortlist/reject history
 
+### Team
+- **Organizations** with roles — **admin** (everything, plus roster and retention),
+  **recruiter** (screen, manage jobs, email), **interviewer** (review and comment only),
+  **viewer** (read-only). Row-level security is enforced on org membership, not on the
+  individual, so a teammate sees the same shortlists you do
+- **Invite by email** — the link only works for the address it was issued to
+- **Threaded discussion** and a **candidate owner** on every candidate
+- **Resume storage** — the original document is kept in a private bucket (deduped per org
+  by content hash), so re-opening a past run still shows the PDF
+- **Append-only audit log** — every status and owner change, written by a database
+  trigger. The table has no update or delete policy, so nobody can rewrite it, admins
+  included
+
+### Candidate-facing
+- **Public apply link per job** — a hosted form that parses and scores the application
+  the moment it lands, capturing the structured fields no parser can infer reliably
+  (location, notice period, expected salary) plus explicit consent
+- **Candidate status page** — one private link, no password, showing their stage and
+  nothing else: never a score, never another applicant
+- **Interview self-scheduling** — offer slots, the candidate books one, and a calendar
+  invite goes out. Slot claims are conditional, so two people cannot take the same slot
+- **Email queue** with merge fields, stage templates, scheduled sends and retry backoff
+- **Auto-acknowledgement** on receipt
+
+### Fairness & compliance
+- **Fairness audit** per run. Rather than guessing anybody's demographics, it runs a
+  controlled substitution experiment: each resume is re-scored under several synthetic
+  identities of deliberately varied name origin, with email, phone and location held
+  constant. Zero spread is a proof, not a correlation — and the report breaks the
+  movement down by scoring signal
+- Also flags **identity fields inside the resumes** (date of birth, marital status,
+  photograph) and **coded language in the job description**
+- **Adverse impact** by the four-fifths rule, from voluntary self-reported data only,
+  suppressed below a minimum group size
+- **Data retention** — after a window you choose, candidate PII and stored resumes are
+  erased in place while scores and counts survive, so History and Insights keep working
+- **Candidate erasure requests**, raised by the candidate or by you
+
 ### Sources & automation
-- Drag-and-drop upload (PDF/DOCX/TXT, multi-file)
+- Drag-and-drop upload (PDF/DOCX/TXT, plus scanned images via OCR)
 - **Gmail**: connect once (OAuth) · pick or **create labels from the app** · screen unread/all ·
   optional mark-as-read
 - **Auto-screen watches** — the backend polls a label every N minutes, screens new
@@ -113,12 +161,31 @@ copy .env.example .env   # paste your Supabase URL + anon key
 npm run dev              # http://localhost:5173
 ```
 
-**Supabase** (auth, history, jobs, statuses, notes, talent pool, analytics)
+**Supabase** (teams, history, jobs, applications, interviews, comments, audit log)
 1. Project Settings → API → copy **Project URL** and **anon public** key into `frontend/.env`.
-2. SQL Editor → run [`supabase/schema.sql`](supabase/schema.sql) (safe to re-run).
-3. Restart `npm run dev`, then create an account on the login page.
+2. SQL Editor → run [`supabase/schema.sql`](supabase/schema.sql). It is idempotent and
+   carries its own v1 → v2 migration: existing single-user rows are moved into a personal
+   organization per user, so nothing is lost. **Re-run it after pulling this version** —
+   the team tables and the private `resumes` bucket are created here.
+3. Restart `npm run dev`, then create an account on the login page. You become the admin
+   of a new team; invite the rest from **Settings → Team**.
 
-Without Supabase keys the app runs open (no login); history-backed features are disabled.
+Without Supabase keys the app still screens resumes and runs the fairness audit; teams,
+history, applications and interviews are disabled.
+
+**Backend env for the candidate-facing features** (`backend/.env`):
+
+```
+SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_SERVICE_KEY=<service_role key>   # server-only, never in the frontend
+PUBLIC_APP_URL=https://your-app.vercel.app
+ADMIN_TOKEN=<random string>               # guards the cron endpoints below
+ANTHROPIC_API_KEY=<optional, enables the AI second opinion>
+```
+
+The service-role key bypasses row-level security, which is exactly why the public apply
+form and status page go through the backend: no table carries an anonymous insert policy.
+Keep that key on the server only.
 
 ---
 
@@ -169,6 +236,11 @@ volume (custom skills, watches).
 | GET/POST/DELETE | `/api/skills` · `/api/skills/custom[/{name}]` | taxonomy |
 | GET/POST | `/api/gmail/status` `connect` `disconnect` `labels` `labels/create` `screen` `send` | Gmail |
 | GET/POST/PATCH/DELETE | `/api/watches[/{id}]` · `/{id}/run` · `/results` · `/results/{id}/ack` | auto-screen |
+| POST | `/api/match/roles` | multipart: one resume vs. many roles -> best fit |
+| GET | `/api/public/job/{token}` | public job details for the apply form |
+| POST | `/api/public/apply/{token}` | multipart application (unauthenticated) |
+| GET/POST | `/api/public/status/{token}` · `/book` · `/delete-request` | candidate status page |
+| POST | `/api/admin/mail/drain` · `/api/admin/retention/run` · `/api/admin/erase` | cron triggers, require `X-Admin-Token` |
 | POST | `/api/export` | Excel (with status/notes) |
 
 ## Project layout
@@ -202,6 +274,13 @@ supabase/schema.sql       tables + RLS policies
 - Offline engine check: `backend\smoke_test.py`.
 
 ## Limitations
-- Scanned-image PDFs have no extractable text (OCR not included).
-- Gmail runs as a single connected account (Desktop OAuth); team-wide Gmail needs Web OAuth.
-- Single-user data model per account — no shared team workspaces yet.
+- Gmail runs as a single connected account per deployment (Desktop OAuth); per-user Gmail
+  would need a Web OAuth client. The email queue therefore sends as that one account.
+- Auto-screen watches and the email/retention workers live in the backend process, so on
+  a host that sleeps they only run while it is awake. Point an external cron at
+  `/api/admin/mail/drain` and `/api/admin/retention/run` there.
+- The fairness audit re-scores the batch once per substituted identity, so it multiplies
+  screening time. It is on by default and can be switched off per run.
+- OCR reads the first few pages of a scan (`OCR_MAX_PAGES`, default 4) and is slower than
+  text extraction.
+- Interview scheduling has no calendar-provider integration; it emails an `.ics` invite.

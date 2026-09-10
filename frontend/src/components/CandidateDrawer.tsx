@@ -9,6 +9,10 @@ import type { Candidate } from "../api";
 import { STATUSES, type Review, type ReviewStatus } from "../lib/db";
 import { Badge, scoreClass, statusVariant } from "./ds";
 import { useToast } from "./Toast";
+import {
+  AIAssessmentCard, CareerTimeline, CommentThread, DecisionHistory, OwnerPicker,
+} from "./CandidateExtras";
+import { candidateKey } from "../lib/db";
 
 const STATUS_LABEL: Record<ReviewStatus, string> = {
   new: "New", shortlisted: "Shortlist", interview: "Interview", rejected: "Reject", hired: "Hired",
@@ -21,8 +25,13 @@ const RING_COLOR = { high: "var(--emerald-400)", mid: "var(--amber-400)", low: "
 interface Props {
   c: Candidate; index: number; total: number; anon: boolean; review?: Review; prior: number;
   canEmail: boolean; canView: boolean;
+  /** Null for an unsaved run — comments and history need a run to hang off. */
+  runId: string | null;
+  /** False for viewers, who are read-only. */
+  canReview: boolean;
   onClose: () => void; onPrev: () => void; onNext: () => void;
   onStatus: (s: ReviewStatus) => void; onNotes: (n: string) => void; onEmail: () => void; onView: () => void;
+  onAssign: (userId: string | null) => void;
 }
 
 export default function CandidateDrawer(p: Props) {
@@ -98,11 +107,17 @@ export default function CandidateDrawer(p: Props) {
             <div className="section-h">Status</div>
             <div className="status-pills" role="radiogroup" aria-label="Status">
               {STATUSES.filter((s) => s !== "new").map((s) => (
-                <button key={s} role="radio" aria-checked={status === s} className={`pill-btn ${s} ${status === s ? "on" : ""}`} onClick={() => p.onStatus(status === s ? "new" : s)}>{STATUS_LABEL[s]}</button>
+                <button key={s} role="radio" aria-checked={status === s} disabled={!p.canReview}
+                  className={`pill-btn ${s} ${status === s ? "on" : ""}`}
+                  onClick={() => p.onStatus(status === s ? "new" : s)}>{STATUS_LABEL[s]}</button>
               ))}
               <span style={{ marginLeft: "auto" }}><Badge variant={statusVariant(status)}>{STATUS_FULL[status]}</Badge></span>
             </div>
           </section>
+
+          <OwnerPicker value={p.review?.assignee_id ?? null} onChange={p.onAssign} disabled={!p.canReview} />
+
+          {c.ai && <AIAssessmentCard ai={c.ai} />}
 
           {c.brief && (
             <section className="insight">
@@ -163,12 +178,20 @@ export default function CandidateDrawer(p: Props) {
             </section>
           )}
 
+          {c.profile && <CareerTimeline profile={c.profile} />}
+
           <section>
-            <div className="section-h">Reviewer notes</div>
-            <textarea className="input textarea" rows={3} placeholder="Interview notes, red flags, next steps…" value={notes} style={{ background: "var(--surface-1)" }}
+            <div className="section-h">Private notes</div>
+            <textarea className="input textarea" rows={3} placeholder="Interview notes, red flags, next steps…"
+              value={notes} style={{ background: "var(--surface-1)" }} disabled={!p.canReview}
               onChange={(e) => setNotes(e.target.value)}
               onBlur={() => { if (notes !== notesRef.current) { notesRef.current = notes; p.onNotes(notes); } }} />
+            <p className="hint">Only you and your team can see these. Use Discussion below to start a thread.</p>
           </section>
+
+          <CommentThread runId={p.runId} candidateKey={candidateKey(c)} canComment={p.canReview} />
+
+          <DecisionHistory runId={p.runId} candidateKey={candidateKey(c)} />
         </div>
 
         <footer className="drawer-foot">

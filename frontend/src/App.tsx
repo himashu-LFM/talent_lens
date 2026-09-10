@@ -10,6 +10,8 @@ import { EmptyState } from "./components/ui";
 // Route-level code splitting: each page loads on first visit.
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Shortlist = lazy(() => import("./pages/Shortlist"));
+const Jobs = lazy(() => import("./pages/Jobs"));
+const Inbox = lazy(() => import("./pages/Inbox"));
 const History = lazy(() => import("./pages/History"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Login = lazy(() => import("./pages/Login"));
@@ -17,6 +19,10 @@ const Landing = lazy(() => import("./pages/Landing"));
 const Settings = lazy(() => import("./pages/Settings"));
 const TalentPool = lazy(() => import("./pages/TalentPool"));
 const Analytics = lazy(() => import("./pages/Analytics"));
+// Candidate-facing, unauthenticated.
+const Apply = lazy(() => import("./pages/Apply"));
+const Status = lazy(() => import("./pages/Status"));
+const Join = lazy(() => import("./pages/Join"));
 
 function Boot() {
   return <div className="boot" role="status" aria-label="Loading"><div className="boot-spinner" /></div>;
@@ -39,7 +45,8 @@ function Home() {
 
 function NotFound() {
   return (
-    <EmptyState icon={<Compass size={26} />} title="Page not found" body={<>That link doesn't exist. <Link to="/">Back to screening</Link>.</>} />
+    <EmptyState icon={<Compass size={26} />} title="Page not found"
+      body={<>That link doesn't exist. <Link to="/">Back to screening</Link>.</>} />
   );
 }
 
@@ -50,9 +57,16 @@ export default function App() {
       <WorkspaceProvider>
         <Suspense fallback={<Boot />}>
           <Routes>
+            {/* Candidate-facing pages: no auth, no app chrome. */}
+            <Route path="/apply/:token" element={<Apply />} />
+            <Route path="/status/:token" element={<Status />} />
+            <Route path="/join/:token" element={<Join />} />
+
             <Route path="/" element={<Home />} />
             <Route path="/login" element={configured && user ? <Navigate to="/" replace /> : <Login />} />
             <Route path="/shortlist" element={<Protected><Shortlist /></Protected>} />
+            <Route path="/jobs" element={<Protected><Jobs /></Protected>} />
+            <Route path="/inbox" element={<Protected><Inbox /></Protected>} />
             <Route path="/history" element={<Protected><History /></Protected>} />
             <Route path="/talent" element={<Protected><TalentPool /></Protected>} />
             <Route path="/analytics" element={<Protected><Analytics /></Protected>} />

@@ -17,6 +17,46 @@ export interface Brief {
   gaps: string[];
 }
 
+export interface CareerRole {
+  title: string;
+  company: string;
+  start: string;
+  end: string;
+  months: number;
+  current: boolean;
+}
+
+export interface CareerProfile {
+  roles: CareerRole[];
+  current_title: string;
+  current_company: string;
+  seniority: string;
+  total_months: number;
+  avg_tenure_months: number;
+  role_count: number;
+  gaps: { from: string; to: string; months: number }[];
+  longest_gap_months: number;
+  job_hopping: boolean;
+  flags: string[];
+  education_level: string;
+  education: { text: string; year?: number }[];
+  grad_year: number | null;
+}
+
+/** Optional LLM second opinion on a shortlisted candidate. */
+export interface AIAssessment {
+  verdict?: "strong_yes" | "yes" | "maybe" | "no";
+  fit_score?: number;
+  summary?: string;
+  strengths?: string[];
+  concerns?: string[];
+  evidence?: string[];
+  questions?: string[];
+  seniority?: string;
+  model?: string;
+  error?: string;
+}
+
 export interface Candidate {
   rank: number;
   filename: string;
@@ -38,6 +78,10 @@ export interface Candidate {
   confidence?: number;
   word_count?: number;
   source?: string;
+  location?: string;
+  links?: Record<string, string>;
+  profile?: CareerProfile;
+  ai?: AIAssessment;
 }
 
 export interface FlaggedDoc {
@@ -49,6 +93,44 @@ export interface FlaggedDoc {
 }
 
 export type Weights = Record<"semantic" | "skills" | "relevance" | "experience", number>;
+
+export interface BiasReport {
+  job_title: string;
+  anonymisation: {
+    ran: boolean;
+    reason?: string;
+    method?: string;
+    candidates?: number;
+    personas?: string[];
+    max_spread?: number;
+    mean_spread?: number;
+    rank_swaps?: number;
+    component_spread?: Record<string, number>;
+    unstable_components?: string[];
+    clean?: boolean;
+    threshold?: number;
+    verdict?: string;
+    recommendation?: string;
+    affected?: { filename: string; name: string; score: number | null; spread: number; by_persona: Record<string, number> }[];
+  };
+  resume_pii: {
+    categories: { category: string; count: number; examples: string[] }[];
+    affected_candidates: number;
+    note: string;
+  };
+  jd_language: { issues: { category: string; terms: string[] }[]; clean: boolean; note: string };
+  adverse_impact: {
+    min_group_size: number;
+    basis: string;
+    attributes: {
+      attribute: string;
+      flagged: string[];
+      note: string;
+      rows: { group: string; total: number; selected?: number; rate?: number; impact_ratio?: number | null; suppressed: boolean }[];
+    }[];
+  };
+  disclaimer: string;
+}
 
 export interface ScreenResponse {
   job: {
@@ -66,6 +148,36 @@ export interface ScreenResponse {
   errors: { filename: string; error: string }[];
   flagged?: FlaggedDoc[];
   fetched?: number;
+  bias_audit?: BiasReport;
+  llm?: {
+    ran: boolean;
+    reason?: string;
+    model?: string;
+    assessed?: number;
+    usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number };
+  };
+}
+
+export interface RoleMatch {
+  job_id?: string;
+  title: string;
+  score: number;
+  breakdown: Record<string, BreakdownEntry>;
+  matched_skills: string[];
+  missing_skills: string[];
+  required_years: number;
+  meets_experience: boolean;
+  headline: string;
+}
+
+export interface RoleMatchResponse {
+  filename: string;
+  error?: string;
+  reasons?: string[];
+  candidate?: Candidate;
+  matches: RoleMatch[];
+  best_fit?: RoleMatch | null;
+  verdict?: string;
 }
 
 export interface GmailStatus {
@@ -90,6 +202,11 @@ export interface Readiness {
   default_weights: Weights;
   watches: number;
   unacked_auto_results: number;
+  ocr?: string;
+  llm?: { available: boolean; status: string; model: string; max_candidates: number };
+  supabase?: boolean;
+  public_apply?: boolean;
+  app_url?: string;
 }
 
 export interface JDIssue {
@@ -181,20 +298,44 @@ export async function readiness(): Promise<Readiness> {
   return json(await fetch("/api/ready"));
 }
 
+export interface ScreenOptions {
+  weights?: Weights;
+  /** Run the fairness audit (re-scores everyone under substituted identities). */
+  audit?: boolean;
+  /** Ask the LLM for a second opinion on the shortlist (needs a server key). */
+  deep?: boolean;
+  deepTopN?: number;
+}
+
 export async function screen(
   title: string,
   description: string,
   topN: number,
   files: File[],
-  weights?: Weights
+  opts: ScreenOptions = {}
 ): Promise<ScreenResponse> {
   const fd = new FormData();
   fd.append("title", title);
   fd.append("description", description);
   fd.append("top_n", String(topN));
-  if (weights) fd.append("weights", JSON.stringify(weights));
+  if (opts.weights) fd.append("weights", JSON.stringify(opts.weights));
+  if (opts.audit) fd.append("audit", "true");
+  if (opts.deep) fd.append("deep", "true");
+  if (opts.deepTopN) fd.append("deep_top_n", String(opts.deepTopN));
   files.forEach((f) => fd.append("files", f));
   return json(await withTimeout("/api/screen", { method: "POST", body: fd }, SCREEN_TIMEOUT_MS));
+}
+
+/** Score one resume against several open roles — "which of our jobs does this
+ *  person actually fit?" */
+export async function matchRoles(
+  file: File,
+  roles: { id?: string; title: string; description: string; weights?: Weights | null }[]
+): Promise<RoleMatchResponse> {
+  const fd = new FormData();
+  fd.append("roles", JSON.stringify(roles));
+  fd.append("file", file);
+  return json(await withTimeout("/api/match/roles", { method: "POST", body: fd }, SCREEN_TIMEOUT_MS));
 }
 
 export async function analyzeJD(title: string, description: string): Promise<JDAnalysis> {
@@ -246,6 +387,9 @@ export async function gmailScreen(params: {
   unread_only: boolean;
   mark_read: boolean;
   weights?: Weights;
+  audit?: boolean;
+  deep?: boolean;
+  deep_top_n?: number;
 }): Promise<ScreenResponse> {
   return json(
     await withTimeout("/api/gmail/screen", { method: "POST", headers: J, body: JSON.stringify(params) }, SCREEN_TIMEOUT_MS)
@@ -298,4 +442,104 @@ export async function exportExcel(candidates: ExportCandidate[], jobTitle = ""):
   a.download = m ? m[1].trim() : "shortlist.xlsx";
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/* ============================================================================
+   Public, unauthenticated candidate endpoints.
+
+   Reachable only with an unguessable token. The status response deliberately
+   carries no score and no internal assessment — that is for the hiring team.
+   ========================================================================== */
+export interface PublicJob {
+  title: string;
+  description: string;
+  location: string;
+  employment_type: string;
+  company: string;
+  contact_email: string;
+}
+
+export interface PublicSlot {
+  id: string;
+  starts_at: string;
+  duration_min: number;
+  mode: string;
+  location: string | null;
+}
+
+export interface PublicStatus {
+  candidate_name: string;
+  job_title: string;
+  job_location: string;
+  company: string;
+  contact_email: string;
+  submitted_at: string;
+  stage: "received" | "in_review" | "interview" | "offer" | "closed";
+  stage_label: string;
+  stage_blurb: string;
+  interview: {
+    id: string; starts_at: string; duration_min: number;
+    mode: string; location: string | null; meeting_link: string | null;
+  } | null;
+  slots: PublicSlot[];
+  can_book: boolean;
+}
+
+export interface ApplyResult {
+  duplicate: boolean;
+  status_token: string;
+  status_url: string;
+  message: string;
+}
+
+export interface ApplyForm {
+  name: string;
+  email: string;
+  phone?: string;
+  location?: string;
+  current_company?: string;
+  current_title?: string;
+  notice_period?: string;
+  expected_salary?: string;
+  cover_note?: string;
+  links?: Record<string, string>;
+  /** Voluntary, self-reported, never used for scoring. */
+  voluntary_demographics?: Record<string, string>;
+  consent: boolean;
+}
+
+export async function publicJob(token: string): Promise<PublicJob> {
+  return json(await fetch(`/api/public/job/${encodeURIComponent(token)}`));
+}
+
+export async function publicApply(token: string, form: ApplyForm, resume: File): Promise<ApplyResult> {
+  const fd = new FormData();
+  fd.append("name", form.name);
+  fd.append("email", form.email);
+  for (const k of ["phone", "location", "current_company", "current_title",
+                   "notice_period", "expected_salary", "cover_note"] as const) {
+    if (form[k]) fd.append(k, String(form[k]));
+  }
+  if (form.links && Object.keys(form.links).length) fd.append("links", JSON.stringify(form.links));
+  if (form.voluntary_demographics && Object.keys(form.voluntary_demographics).length) {
+    fd.append("voluntary_demographics", JSON.stringify(form.voluntary_demographics));
+  }
+  fd.append("consent", form.consent ? "true" : "false");
+  fd.append("resume", resume);
+  return json(await withTimeout(`/api/public/apply/${encodeURIComponent(token)}`,
+                                { method: "POST", body: fd }, SCREEN_TIMEOUT_MS));
+}
+
+export async function publicStatus(token: string): Promise<PublicStatus> {
+  return json(await fetch(`/api/public/status/${encodeURIComponent(token)}`));
+}
+
+export async function publicBook(token: string, slotId: string): Promise<{ booked: boolean; when: string; mode: string; message: string }> {
+  return json(await fetch(`/api/public/status/${encodeURIComponent(token)}/book`,
+    { method: "POST", headers: J, body: JSON.stringify({ slot_id: slotId }) }));
+}
+
+export async function publicDeleteRequest(token: string, reason: string): Promise<{ received: boolean; message: string }> {
+  return json(await fetch(`/api/public/status/${encodeURIComponent(token)}/delete-request`,
+    { method: "POST", headers: J, body: JSON.stringify({ reason }) }));
 }

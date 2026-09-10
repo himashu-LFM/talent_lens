@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { useToast } from "../components/Toast";
 import { EmptyState, Num, SkeletonCard } from "../components/ui";
 import { ProgressBar } from "../components/ds";
+import { useWorkspace } from "../context/Workspace";
 import { listAllReviews, listRuns, type Review, type RunRow } from "../lib/db";
 import type { Candidate } from "../api";
 
@@ -19,6 +20,7 @@ function weekKey(iso: string) {
 export default function Analytics() {
   const { configured } = useAuth();
   const toast = useToast();
+  const { orgId } = useWorkspace();
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,7 +28,7 @@ export default function Analytics() {
 
   useEffect(() => {
     if (!configured) { setLoading(false); return; }
-    Promise.all([listRuns(), listAllReviews()])
+    Promise.all([listRuns(orgId || undefined), listAllReviews(orgId || undefined)])
       .then(([r, rv]) => { setRuns(r); setReviews(rv); })
       .catch((e) => toast.error(`Couldn't load analytics: ${e.message}`))
       .finally(() => setLoading(false));

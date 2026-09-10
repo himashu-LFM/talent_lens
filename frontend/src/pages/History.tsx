@@ -18,14 +18,14 @@ export default function History() {
   const toast = useToast();
   const nav = useNavigate();
   const { configured } = useAuth();
-  const { setRun, resetFilters, run } = useWorkspace();
+  const { setRun, resetFilters, run, orgId } = useWorkspace();
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (!configured) { setLoading(false); return; }
-    listRuns()
+    listRuns(orgId || undefined)
       .then((rs) => {
         setRuns(rs);
         const want = new URLSearchParams(window.location.search).get("run");
@@ -38,7 +38,10 @@ export default function History() {
 
   function openRun(r: RunRow) {
     resetFilters();
-    setRun({ data: r.results, runId: r.id, files: [], title: r.title, source: "history", at: r.created_at });
+    setRun({
+      data: r.results, runId: r.id, files: [], title: r.title,
+      source: "history", jobId: r.job_id ?? null, at: r.created_at,
+    });
     nav("/shortlist");
   }
   async function remove(id: string) {

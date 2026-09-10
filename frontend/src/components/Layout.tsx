@@ -1,18 +1,25 @@
 /* App shell: 84px icon rail · 300px context sidebar · main column with a sticky
    glass header. Pages fill the sidebar through <Sidebar> (a portal slot). */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { BarChart3, Bell, History as HistoryIcon, ListOrdered, LogOut, ScanLine, Search, Settings as SettingsIcon, Users } from "lucide-react";
+import {
+  BarChart3, Bell, Building2, CalendarClock, Check, ChevronDown, History as HistoryIcon,
+  Inbox, ListOrdered, LogOut, Plus, ScanLine, Search, Settings as SettingsIcon, Users,
+} from "lucide-react";
 import { useAuth } from "../auth/AuthProvider";
 import { applyTheme, getTheme, type Theme } from "../lib/theme";
 import { useWorkspace } from "../context/Workspace";
-import { Avatar, Eyebrow, initialsOf } from "./ds";
+import { ROLE_LABEL, createOrg } from "../lib/db";
+import { Avatar, Badge, Eyebrow, initialsOf } from "./ds";
 import { LogoTile } from "./Logo";
 import CommandPalette, { useCommandPalette } from "./CommandPalette";
+import { useToast } from "./Toast";
 
 const NAV = [
   { to: "/", label: "Screen", icon: ScanLine, end: true },
   { to: "/shortlist", label: "Shortlist", icon: ListOrdered },
+  { to: "/jobs", label: "Jobs", icon: CalendarClock },
+  { to: "/inbox", label: "Inbox", icon: Inbox },
   { to: "/history", label: "History", icon: HistoryIcon },
   { to: "/talent", label: "Pool", icon: Users },
   { to: "/analytics", label: "Insights", icon: BarChart3 },
@@ -22,10 +29,12 @@ const NAV = [
 const TITLES: Record<string, [string, string]> = {
   "/": ["New screening run", "Define the role, add resumes, get a ranked shortlist"],
   "/shortlist": ["Shortlist", "Ranked candidates with evidence"],
+  "/jobs": ["Jobs & interviews", "Open roles, apply links and interview slots"],
+  "/inbox": ["Applications", "Everything that came in through your apply links"],
   "/history": ["Screening history", "Every run, re-openable with its statuses and notes"],
   "/talent": ["Talent pool", "Everyone you have ever screened, searchable"],
   "/analytics": ["Insights", "Funnel, trends and skill gaps"],
-  "/settings": ["Settings", "Connections, automation and taxonomy"],
+  "/settings": ["Settings", "Team, connections, templates and compliance"],
   "/profile": ["Profile", "Your account and screening activity"],
 };
 
@@ -37,13 +46,41 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, signOut, configured } = useAuth();
   const nav = useNavigate();
   const loc = useLocation();
-  const { run, draftTitle, ready, setSidebarEl } = useWorkspace();
+  const toast = useToast();
+  const {
+    run, draftTitle, ready, setSidebarEl,
+    memberships, org, orgId, role, switchOrg, refreshOrgs,
+  } = useWorkspace();
   const [theme, setTheme] = useState<Theme>(getTheme());
+  const [orgMenu, setOrgMenu] = useState(false);
   const cmd = useCommandPalette();
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { applyTheme(theme); }, [theme]);
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOrgMenu(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
   const doSignOut = async () => { await signOut(); nav("/login"); };
+
+  async function newTeam() {
+    const name = window.prompt("Name for the new team");
+    if (!name?.trim() || !user) return;
+    try {
+      const created = await createOrg(user.id, name.trim());
+      await refreshOrgs();
+      switchOrg(created.id);
+      setOrgMenu(false);
+      toast.success(`Team “${created.name}” created — you're the admin.`);
+    } catch (e) {
+      toast.error(`Couldn't create the team: ${e instanceof Error ? e.message : ""}`);
+    }
+  }
 
   const idx = NAV.findIndex((n) => (n.end ? loc.pathname === n.to : loc.pathname.startsWith(n.to)));
   const [title, sub] = useMemo(() => {
@@ -86,6 +123,36 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </nav>
 
       <aside className="ctx" aria-label="Context">
+        <div className="ctx-org" ref={menuRef}>
+          <button className="org-btn" onClick={() => setOrgMenu((m) => !m)}
+            aria-haspopup="menu" aria-expanded={orgMenu} disabled={!configured}>
+            <Building2 size={15} />
+            <span className="ellipsis">{org?.name || (configured ? "No team" : "Local mode")}</span>
+            {role && <Badge variant={role === "admin" ? "warning" : "neutral"}>{ROLE_LABEL[role]}</Badge>}
+            {configured && <ChevronDown size={14} className="org-caret" />}
+          </button>
+          {orgMenu && (
+            <div className="org-menu" role="menu">
+              <div className="org-menu-head">Your teams</div>
+              {memberships.map((m) => {
+                const o = m.organizations as { id: string; name: string } | undefined;
+                return (
+                  <button key={m.org_id} role="menuitem" className={`org-item ${m.org_id === orgId ? "on" : ""}`}
+                    onClick={() => { switchOrg(m.org_id); setOrgMenu(false); }}>
+                    <span className="ellipsis">{o?.name || "Team"}</span>
+                    <span className="org-role">{ROLE_LABEL[m.role]}</span>
+                    {m.org_id === orgId && <Check size={14} />}
+                  </button>
+                );
+              })}
+              {!memberships.length && <div className="org-empty">You're not in a team yet.</div>}
+              <button role="menuitem" className="org-item new" onClick={newTeam}>
+                <Plus size={14} /> New team
+              </button>
+            </div>
+          )}
+        </div>
+
         <div className="ctx-head">
           <Eyebrow amber tight>Active role</Eyebrow>
           <div className="ctx-title" title={roleTitle || undefined}>{roleTitle || "No role yet"}</div>
@@ -93,10 +160,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             {run ? `${run.data.total_resumes} screened · ${run.data.top.length} shortlisted · ${shortDate(run.at)}` : "Describe a role and add resumes to start"}
           </div>
         </div>
+
         <div className="ctx-body" ref={setSidebarEl} key={loc.pathname} />
+
         <div className="ctx-foot">
           <span className={`pulse-dot ${ready ? "" : "off"}`} />
-          <span>{ready ? (ready.semantic_model === "ready" ? "Engine ready · offline" : "Engine ready · lexical mode") : "Connecting to engine…"}</span>
+          <span className="ellipsis">
+            {ready ? (ready.semantic_model === "ready" ? "Engine ready · offline" : "Engine ready · lexical mode") : "Connecting to engine…"}
+          </span>
         </div>
       </aside>
 
@@ -105,6 +176,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <h1 className="main-title">{title}</h1>
           <span className="main-sub">{sub}</span>
           <div className="grow" />
+          {role === "viewer" && <Badge variant="neutral">Read-only</Badge>}
           <button className="cmd-btn" onClick={() => cmd.setOpen(true)} aria-label="Open command palette">
             <Search size={14} /><span>Search</span><kbd>⌘K</kbd>
           </button>
