@@ -108,9 +108,16 @@ def disconnect() -> None:
         )
 
 
-def send_email(to: str, subject: str, body: str) -> str:
-    """Send a plain-text email from the connected account. Returns message id."""
+def send_email(to: str, subject: str, body: str,
+               attachments: list[tuple[str, bytes, str]] | None = None) -> str:
+    """Send an email from the connected account. Returns the Gmail message id.
+
+    `attachments` is a list of (filename, data, mime_type) — used for calendar
+    invites (text/calendar), which Gmail and Outlook render as an RSVP.
+    """
     import base64 as _b64
+    from email.mime.base import MIMEBase
+    from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
     if not can_send():
@@ -119,7 +126,19 @@ def send_email(to: str, subject: str, body: str) -> str:
             "disconnect and connect again."
         )
     svc = _service()
-    msg = MIMEText(body, "plain", "utf-8")
+    if attachments:
+        msg = MIMEMultipart("mixed")
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        for filename, data, mime in attachments:
+            maintype, _, subtype = mime.partition("/")
+            part = MIMEBase(maintype or "application", subtype or "octet-stream")
+            part.set_payload(data)
+            from email import encoders as _enc
+            _enc.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(part)
+    else:
+        msg = MIMEText(body, "plain", "utf-8")
     msg["to"] = to
     msg["subject"] = subject
     raw = _b64.urlsafe_b64encode(msg.as_bytes()).decode()

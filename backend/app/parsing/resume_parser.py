@@ -55,6 +55,9 @@ class ParsedResume:
     confidence: float = 1.0          # 0..1 — how much this looks like a resume
     confidence_reasons: list[str] = field(default_factory=list)
     word_count: int = 0
+    location: str = ""
+    links: dict = field(default_factory=dict)
+    profile: dict = field(default_factory=dict)   # structured career shape
 
     def to_dict(self) -> dict:
         return {
@@ -66,6 +69,9 @@ class ParsedResume:
             "skills": self.skills,
             "confidence": self.confidence,
             "word_count": self.word_count,
+            "location": self.location,
+            "links": self.links,
+            "profile": self.profile,
         }
 
 
@@ -214,12 +220,56 @@ def _extract_name(text: str, email: str) -> str:
     return lines[0] if lines else "Unknown"
 
 
+_LINK_RES = {
+    "linkedin": re.compile(r"(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/(?:in|pub)/[A-Za-z0-9\-_%]+", re.I),
+    "github": re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9\-_.]+", re.I),
+    "portfolio": re.compile(r"(?:https?://)?(?:www\.)?[A-Za-z0-9\-]+\.(?:dev|me|io|com|net|app)/?[A-Za-z0-9\-_/]*", re.I),
+}
+# City/region on its own line or beside the contact block. Deliberately loose:
+# it is shown to the recruiter, never scored.
+_LOCATION_RE = re.compile(
+    r"([A-Z][a-zA-Z.\-]+(?:\s[A-Z][a-zA-Z.\-]+){0,2})\s*,\s*"
+    r"([A-Z][a-zA-Z.\-]+(?:\s[A-Z][a-zA-Z.\-]+){0,2})"
+)
+_NOT_LOCATION = re.compile(
+    r"@|http|\d{4}|(university|institute|college|school|inc|ltd|llc|pvt|technologies|"
+    r"solutions|present|current|experience|education|skills|projects)", re.I)
+
+
+def _extract_links(text: str) -> dict:
+    out: dict = {}
+    for key in ("linkedin", "github"):
+        m = _LINK_RES[key].search(text)
+        if m:
+            url = m.group(0)
+            out[key] = url if url.lower().startswith("http") else f"https://{url}"
+    return out
+
+
+def _extract_location(text: str) -> str:
+    for ln in [l.strip() for l in text.splitlines()[:25] if l.strip()]:
+        if len(ln) > 90 or _NOT_LOCATION.search(ln):
+            continue
+        m = _LOCATION_RE.search(ln)
+        if m:
+            return f"{m.group(1)}, {m.group(2)}"[:80]
+    return ""
+
+
 def parse_resume(filename: str, text: str) -> ParsedResume:
     email = _extract_email(text)
     phone = _extract_phone(text)
     years = _extract_experience(text)
     skills = sorted(canonical_skills_in(text))
     conf, reasons = resume_confidence(text, email, phone, skills, years)
+    # Imported lazily: app.parsing.profile imports helpers from this module.
+    from app.parsing.profile import build_profile
+
+    career = build_profile(text)
+    # Dated history is more reliable than a self-reported "5+ years" line, but
+    # only trust it when we actually found roles.
+    if career.total_months >= 6:
+        years = max(years, round(career.total_months / 12.0, 1))
     return ParsedResume(
         filename=filename,
         name=_extract_name(text, email),
@@ -231,4 +281,7 @@ def parse_resume(filename: str, text: str) -> ParsedResume:
         confidence=conf,
         confidence_reasons=reasons,
         word_count=len(text.split()),
+        location=_extract_location(text),
+        links=_extract_links(text),
+        profile=career.to_dict(),
     )

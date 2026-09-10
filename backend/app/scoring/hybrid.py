@@ -101,6 +101,33 @@ def _chunks(text: str, target: int = 450) -> list[str]:
     return out or [text[:target]]
 
 
+_EMAIL_SUB = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+_PHONE_SUB = re.compile(r"(?:(?:\+|00)\d{1,3}[\s.\-]?)?(?:\(?\d{2,4}\)?[\s.\-]?){2,4}\d{2,4}")
+_PROFILE_SUB = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:linkedin\.com/(?:in|pub)|github\.com)/[A-Za-z0-9\-_.%]+",
+    re.IGNORECASE,
+)
+
+
+def _deidentify(chunk: str, resume: ParsedResume) -> str:
+    """Replace the candidate's identity with fixed placeholders of the same shape.
+
+    Used only for the text handed to the embedding model, so the semantic score
+    reflects professional content rather than whose name is on the page. Token
+    count is preserved so document-length effects don't shift instead.
+    """
+    out = chunk
+    for tok in re.split(r"[^A-Za-z]+", resume.name or ""):
+        if len(tok) >= 3:
+            out = re.sub(rf"\b{re.escape(tok)}\b", "Candidate", out, flags=re.IGNORECASE)
+    out = _EMAIL_SUB.sub("candidate@example.com", out)
+    out = _PHONE_SUB.sub(" 0000000000 ", out)
+    out = _PROFILE_SUB.sub("profile/candidate", out)
+    if resume.location:
+        out = out.replace(resume.location, "Location")
+    return out
+
+
 def _snippet_for(term: str, text: str) -> str:
     for s in _sentences(text):
         if contains_term(s, term):
@@ -403,11 +430,22 @@ def score_batch(
     mean_vecs: list[list[float] | None] = [None] * len(resumes)
     if use_sem:
         job_text = f"{job.title}. {job.description}"
-        all_chunks: list[str] = []
+        all_chunks: list[str] = []      # de-identified — what the model sees
+        shown_chunks: list[str] = []    # original text — what the recruiter sees
         owner: list[int] = []
         for i, r in enumerate(resumes):
-            cs = _chunks(r.raw_text[:12000])
+            raw = r.raw_text[:12000]
+            # The embedding encodes every word, including the candidate's name, so
+            # scoring the raw text makes the semantic signal name-sensitive (the
+            # fairness audit measures exactly this). De-identify *before* chunking:
+            # doing it afterwards leaves chunk boundaries dependent on how many
+            # characters the person's name happens to have.
+            cs = _chunks(_deidentify(raw, r))
+            shown = _chunks(raw)
             all_chunks.extend(cs)
+            shown_chunks.extend(
+                shown[k] if k < len(shown) else cs[k] for k in range(len(cs))
+            )
             owner.extend([i] * len(cs))
         vecs = embedding.embed([job_text] + all_chunks)
         if vecs:
@@ -416,7 +454,7 @@ def score_batch(
             acc: dict[int, list[list[float]]] = {}
             for ci, rv in enumerate(vecs[1:]):
                 o = owner[ci]
-                per.setdefault(o, []).append((embedding.cosine(jv, rv), all_chunks[ci]))
+                per.setdefault(o, []).append((embedding.cosine(jv, rv), shown_chunks[ci]))
                 acc.setdefault(o, []).append(rv)
             for i, lst in per.items():
                 lst.sort(key=lambda x: x[0], reverse=True)

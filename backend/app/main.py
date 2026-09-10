@@ -15,9 +15,12 @@ from pydantic import BaseModel
 
 from app import config
 from app.export.excel import build_excel
+from app.parsing import ocr
 from app.scoring import embedding, skills
-from app.services import gmail_client, jd_analyzer, watcher
-from app.services.screening import run_screening
+from app.services import (gmail_client, jd_analyzer, llm, mailer, public_intake,
+                          retention, watcher)
+from app.services.public_intake import IntakeError
+from app.services.screening import match_against_roles, run_screening
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -27,11 +30,18 @@ log = logging.getLogger("talentlens")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     watcher.start()
+    if config.supabase_configured():
+        mailer.start()
+        retention.start()
+    else:
+        log.info("Supabase not configured - email queue and retention workers idle")
     yield
     watcher.stop()
+    mailer.stop()
+    retention.stop()
 
 
-app = FastAPI(title="TalentLens API", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="TalentLens API", version="4.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS,
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -39,15 +49,17 @@ app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS,
 # Middleware: request id + timing, per-IP rate limit on heavy endpoints
 # --------------------------------------------------------------------------
 _hits: dict[str, deque] = defaultdict(deque)
-_RATE_PATHS = ("/api/screen", "/api/gmail/screen")
+_public_hits: dict[str, deque] = defaultdict(deque)
+_RATE_PATHS = ("/api/screen", "/api/gmail/screen", "/api/match/roles")
+_PUBLIC_PREFIX = "/api/public/"
 
 
 @app.middleware("http")
 async def observability(request: Request, call_next):
     rid = uuid.uuid4().hex[:8]
     start = time.perf_counter()
+    ip = request.client.host if request.client else "unknown"
     if request.url.path in _RATE_PATHS:
-        ip = request.client.host if request.client else "unknown"
         now = time.time()
         q = _hits[ip]
         while q and now - q[0] > 60:
@@ -55,6 +67,16 @@ async def observability(request: Request, call_next):
         if len(q) >= config.RATE_LIMIT_PER_MINUTE:
             return JSONResponse({"detail": "Too many screening requests — please wait a minute."},
                                 status_code=429)
+        q.append(now)
+    elif request.url.path.startswith(_PUBLIC_PREFIX) and request.method == "POST":
+        now = time.time()
+        q = _public_hits[ip]
+        while q and now - q[0] > 3600:
+            q.popleft()
+        if len(q) >= config.PUBLIC_RATE_LIMIT_PER_HOUR:
+            return JSONResponse(
+                {"detail": "Too many submissions from this network. Please try again later."},
+                status_code=429)
         q.append(now)
     try:
         response = await call_next(request)
@@ -88,6 +110,12 @@ def ready() -> dict:
         "default_weights": config.DEFAULT_WEIGHTS,
         "watches": len(watcher.list_watches()),
         "unacked_auto_results": len(watcher.list_results(unacked_only=True)),
+        "ocr": "ready" if ocr.available() else ocr.status(),
+        "llm": {"available": llm.available(), "status": llm.status(),
+                "model": config.LLM_MODEL, "max_candidates": config.LLM_MAX_CANDIDATES},
+        "supabase": config.supabase_configured(),
+        "public_apply": config.supabase_configured(),
+        "app_url": config.PUBLIC_APP_URL,
     }
 
 
@@ -122,6 +150,9 @@ async def screen(
     description: str = Form(...),
     top_n: int = Form(10),
     weights: str | None = Form(None),
+    audit: bool = Form(False),
+    deep: bool = Form(False),
+    deep_top_n: int = Form(0),
     files: list[UploadFile] = File(...),
 ):
     if not files:
@@ -135,7 +166,9 @@ async def screen(
         data = await f.read()
         _validate_upload(f, data)
         payload.append((f.filename or "resume", data))
-    return run_screening(title, description, top_n, payload, weights=_parse_weights(weights))
+    return run_screening(title, description, top_n, payload,
+                         weights=_parse_weights(weights),
+                         audit=audit, deep=deep, deep_top_n=deep_top_n)
 
 
 # --------------------------------------------------------------------------
@@ -243,6 +276,9 @@ class GmailScreenRequest(BaseModel):
     unread_only: bool = True
     mark_read: bool = True
     weights: dict | None = None
+    audit: bool = False
+    deep: bool = False
+    deep_top_n: int = 0
 
 
 @app.post("/api/gmail/screen")
@@ -261,7 +297,8 @@ def gmail_screen(req: GmailScreenRequest):
                 "total_resumes": 0, "ranked": [], "top": [], "top_n": req.top_n,
                 "errors": [], "flagged": [], "fetched": 0}
     result = run_screening(req.title, req.description, req.top_n, files,
-                           sources=meta, weights=req.weights)
+                           sources=meta, weights=req.weights,
+                           audit=req.audit, deep=req.deep, deep_top_n=req.deep_top_n)
     result["fetched"] = len(files)
     return result
 
@@ -300,6 +337,9 @@ class WatchRequest(BaseModel):
     unread_only: bool = True
     mark_read: bool = True
     weights: dict | None = None
+    audit: bool = False
+    deep: bool = False
+    deep_top_n: int = 0
 
 
 class WatchUpdate(BaseModel):
@@ -394,3 +434,153 @@ def export(req: ExportRequest):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=shortlist_{safe}.xlsx"},
     )
+
+
+# --------------------------------------------------------------------------
+# Best-fit across open roles: one resume vs. several job descriptions
+# --------------------------------------------------------------------------
+@app.post("/api/match/roles")
+async def match_roles(
+    roles: str = Form(...),
+    weights: str | None = Form(None),
+    file: UploadFile = File(...),
+):
+    try:
+        parsed_roles = json.loads(roles)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "roles must be a JSON array.")
+    if not isinstance(parsed_roles, list) or not parsed_roles:
+        raise HTTPException(400, "Provide at least one role to compare against.")
+    if len(parsed_roles) > 50:
+        raise HTTPException(400, "Compare against at most 50 roles at a time.")
+    for r in parsed_roles:
+        if not isinstance(r, dict) or not (r.get("description") or "").strip():
+            raise HTTPException(400, "Every role needs a description.")
+
+    data = await file.read()
+    _validate_upload(file, data)
+    return match_against_roles(file.filename or "resume", data, parsed_roles,
+                               weights=_parse_weights(weights))
+
+
+# --------------------------------------------------------------------------
+# Public, unauthenticated candidate flows
+#
+# Reachable only with an unguessable token. Every write goes through the
+# service-role client, so no table carries an anonymous insert policy.
+# --------------------------------------------------------------------------
+def _intake_guard(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except IntakeError as e:
+        raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.exception("public intake error")
+        raise HTTPException(500, "Something went wrong. Please try again.")
+
+
+@app.get("/api/public/job/{token}")
+def public_job(token: str) -> dict:
+    return _intake_guard(public_intake.job_by_token, token)
+
+
+@app.post("/api/public/apply/{token}")
+async def public_apply(
+    token: str,
+    name: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(""),
+    location: str = Form(""),
+    current_company: str = Form(""),
+    current_title: str = Form(""),
+    notice_period: str = Form(""),
+    expected_salary: str = Form(""),
+    cover_note: str = Form(""),
+    links: str = Form(""),
+    voluntary_demographics: str = Form(""),
+    consent: bool = Form(False),
+    resume: UploadFile = File(...),
+):
+    def _json_field(raw: str, label: str) -> dict:
+        if not raw.strip():
+            return {}
+        try:
+            val = json.loads(raw)
+            return val if isinstance(val, dict) else {}
+        except json.JSONDecodeError:
+            raise HTTPException(400, f"{label} must be a JSON object.")
+
+    data = await resume.read()
+    form = {
+        "name": name, "email": email, "phone": phone, "location": location,
+        "current_company": current_company, "current_title": current_title,
+        "notice_period": notice_period, "expected_salary": expected_salary,
+        "cover_note": cover_note,
+        "links": _json_field(links, "links"),
+        "voluntary_demographics": _json_field(voluntary_demographics, "voluntary_demographics") or None,
+        "consent": consent,
+    }
+    return _intake_guard(public_intake.submit_application, token, form,
+                         resume.filename or "resume.pdf", data)
+
+
+@app.get("/api/public/status/{status_token}")
+def public_status(status_token: str) -> dict:
+    return _intake_guard(public_intake.application_status, status_token)
+
+
+class BookRequest(BaseModel):
+    slot_id: str
+
+
+@app.post("/api/public/status/{status_token}/book")
+def public_book(status_token: str, req: BookRequest) -> dict:
+    return _intake_guard(public_intake.book_slot, status_token, req.slot_id)
+
+
+class DeletionRequest(BaseModel):
+    reason: str = ""
+
+
+@app.post("/api/public/status/{status_token}/delete-request")
+def public_delete_request(status_token: str, req: DeletionRequest) -> dict:
+    return _intake_guard(public_intake.request_deletion, status_token, req.reason)
+
+
+# --------------------------------------------------------------------------
+# Admin / background triggers
+#
+# These move or erase data, so they always require ADMIN_TOKEN — an unset token
+# means "disabled", never "open". Useful for an external cron on a host where
+# the in-process workers can't run continuously (e.g. a sleeping free tier).
+# --------------------------------------------------------------------------
+def _require_admin(request: Request) -> None:
+    if not config.ADMIN_TOKEN:
+        raise HTTPException(503, "Set ADMIN_TOKEN on the server to enable this endpoint.")
+    if request.headers.get("X-Admin-Token") != config.ADMIN_TOKEN:
+        raise HTTPException(401, "Invalid admin token.")
+
+
+@app.post("/api/admin/mail/drain")
+def admin_mail_drain(request: Request) -> dict:
+    _require_admin(request)
+    return mailer.drain_once()
+
+
+@app.post("/api/admin/retention/run")
+def admin_retention_run(request: Request) -> dict:
+    _require_admin(request)
+    return retention.run_all()
+
+
+class EraseRequest(BaseModel):
+    org_id: str
+    email: str
+
+
+@app.post("/api/admin/erase")
+def admin_erase(request: Request, req: EraseRequest) -> dict:
+    _require_admin(request)
+    return retention.erase_candidate(req.org_id, req.email)
